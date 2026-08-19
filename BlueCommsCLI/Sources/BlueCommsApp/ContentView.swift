@@ -1,3 +1,4 @@
+import BlueCommsCore
 import SwiftUI
 
 struct ContentView: View {
@@ -224,12 +225,20 @@ private struct MessageBubble: View {
                     .padding(.vertical, 8)
                     .background(message.isLocal ? Palette.localBubble : Palette.remoteBubble)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                Text(message.sentAt.formatted(date: .omitted, time: .shortened))
+                Text(caption(for: message))
                     .font(.system(size: 10))
-                    .foregroundStyle(Palette.muted)
+                    .foregroundStyle(message.delivery == .queued ? Palette.accent : Palette.muted)
             }
             if !message.isLocal { Spacer(minLength: 80) }
         }
+    }
+
+    private func caption(for message: ChatMessage) -> String {
+        let time = message.sentAt.formatted(date: .omitted, time: .shortened)
+        if message.delivery == .queued {
+            return "\(time) · Queued — sends when they are back"
+        }
+        return time
     }
 }
 

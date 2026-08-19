@@ -29,6 +29,9 @@ struct BlueCommsSelfTest {
             ("tofu mismatch", testTOFUMismatch),
             ("bonjour name respects byte limit", testBonjourNameRespectsByteLimit),
             ("framed ciphertext round trip", testFramedCiphertextRoundTrip),
+            ("archive round trip", testArchiveRoundTrip),
+            ("archive empty load", testArchiveEmptyLoad),
+            ("archive rejects wrong key", testArchiveWrongKey),
         ]
 
         for (name, body) in cases {
@@ -257,4 +260,43 @@ private func testFramedCiphertextRoundTrip() throws {
         throw Failure(message: "expected ciphertext frame")
     }
     try expectEqual(try bob.open(frame.dropFirst()), Data("secret chat".utf8))
+}
+
+private func testArchiveRoundTrip() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("bluecomms-archive-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: url) }
+    let archive = try MessageArchive(directory: url)
+    let peer = UUID().uuidString
+    let message = ChatMessage(peerID: peer, text: "held for later", isLocal: true, delivery: .queued)
+    try archive.save(ConversationSnapshot(conversations: [peer: [message]], outboundIDs: [message.id]))
+    let loaded = try MessageArchive(directory: url).load()
+    try expectEqual(loaded.conversations[peer]?.first?.text, "held for later")
+    try expectEqual(loaded.conversations[peer]?.first?.delivery, .queued)
+    try expectEqual(loaded.outboundIDs, [message.id])
+}
+
+private func testArchiveEmptyLoad() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("bluecomms-archive-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: url) }
+    let loaded = try MessageArchive(directory: url).load()
+    try expect(loaded.conversations.isEmpty, "expected empty archive")
+}
+
+private func testArchiveWrongKey() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("bluecomms-archive-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: url) }
+    let archive = try MessageArchive(directory: url)
+    try archive.save(ConversationSnapshot(conversations: ["x": [ChatMessage(peerID: "x", text: "secret", isLocal: true)]]))
+    try FileManager.default.removeItem(at: url.appendingPathComponent("archive.key"))
+    do {
+        _ = try MessageArchive(directory: url).load()
+        throw Failure(message: "expected decrypt to fail after key rotation")
+    } catch is Failure {
+        throw Failure(message: "expected decrypt to fail after key rotation")
+    } catch {
+        // AES-GCM open failure is the success path
+    }
 }
