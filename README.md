@@ -15,7 +15,7 @@ swift run BlueCommsCLI          # original terminal client
 
 Run it on two Macs on the same LAN, or on two Macs with Wi-Fi on and no access point (AWDL).
 
-The first launch creates `~/.bluecomms/` (device id, identity key, known-peer list, encrypted conversation archive) with `0700` / `0600` permissions. Chat history survives quit. Messages typed while a peer is gone stay queued and flush when that session comes back.
+The first launch creates `~/.bluecomms/` (device id, identity key, known-peer list, encrypted conversation archive) with `0700` / `0600` permissions. Chat history survives quit. Messages typed while a peer is gone stay queued and flush when that session comes back. You can keep a live session with more than one peer; the sidebar shows online vs last-seen.
 
 ## Local Network permission
 

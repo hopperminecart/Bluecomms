@@ -5,6 +5,8 @@ struct NearbyPeer: Identifiable, Hashable, Sendable {
     let displayName: String
     let shortName: String
     var isOnline: Bool
+    var lastSeen: Date
+    var isSessionOpen: Bool
 }
 
 enum ConnectionPhase: Equatable, Sendable {

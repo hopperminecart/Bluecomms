@@ -19,8 +19,11 @@ public final class NetworkManager: @unchecked Sendable {
 
     private var listener: NWListener?
     private var browser: NWBrowser?
-    private var activeConnection: PeerConnection?
+    private var sessions: [String: PeerConnection] = [:]
+    private var pending: [UUID: PeerConnection] = [:]
+    private var lastPeerID: String?
     private var discoveredByID: [String: DiscoveredPeer] = [:]
+    private var lastSeenAt: [String: Date] = [:]
     private var isStopping = false
     private var restartWork: DispatchWorkItem?
     private var restartAttempt = 0
@@ -30,7 +33,9 @@ public final class NetworkManager: @unchecked Sendable {
     public var onConnectionEstablished: (() -> Void)?
     public var onSecureSession: ((UUID) -> Void)?
     public var onDisconnected: (() -> Void)?
+    public var onPeerDisconnected: ((UUID) -> Void)?
     public var onMessageReceived: ((String) -> Void)?
+    public var onMessageFromPeer: ((UUID, String) -> Void)?
     public var onLog: ((String) -> Void)?
 
     public var deviceID: UUID { identity.id }
@@ -39,7 +44,19 @@ public final class NetworkManager: @unchecked Sendable {
     public var fingerprint: String { identity.fingerprint }
 
     public var isConnected: Bool {
-        onQueueSync { activeConnection?.isReadyForMessages == true }
+        onQueueSync { sessions.values.contains(where: \.isReadyForMessages) }
+    }
+
+    public func isConnected(to peerID: String) -> Bool {
+        onQueueSync { sessions[peerID]?.isReadyForMessages == true }
+    }
+
+    public func lastSeen(of peerID: String) -> Date? {
+        onQueueSync { lastSeenAt[peerID] }
+    }
+
+    public var connectedPeerIDs: [String] {
+        onQueueSync { sessions.filter { $0.value.isReadyForMessages }.map(\.key) }
     }
 
     public var peers: [DiscoveredPeer] {
@@ -72,12 +89,19 @@ public final class NetworkManager: @unchecked Sendable {
 
     public func disconnect() {
         onQueueAsync {
-            self.activeConnection?.cancel()
-            self.activeConnection = nil
-            self.emitLog("[CONNECTION] Disconnected.")
-            DispatchQueue.main.async { [weak self] in
-                self?.onDisconnected?()
+            if let last = self.lastPeerID {
+                self.disconnectLocked(peerID: last)
+                return
             }
+            for id in self.sessions.keys {
+                self.disconnectLocked(peerID: id)
+            }
+        }
+    }
+
+    public func disconnect(from peerID: String) {
+        onQueueAsync {
+            self.disconnectLocked(peerID: peerID)
         }
     }
 
@@ -137,10 +161,22 @@ public final class NetworkManager: @unchecked Sendable {
 
     public func send(message: String) {
         onQueueAsync {
-            guard let conn = self.activeConnection else {
+            let target = self.lastPeerID ?? self.sessions.first(where: { $0.value.isReadyForMessages })?.key
+            guard let target, let conn = self.sessions[target], conn.isReadyForMessages else {
                 self.emitLog("No active connection to send message.")
                 return
             }
+            conn.send(message: message)
+        }
+    }
+
+    public func send(message: String, to peerID: String) {
+        onQueueAsync {
+            guard let conn = self.sessions[peerID], conn.isReadyForMessages else {
+                self.emitLog("No session with that peer.")
+                return
+            }
+            self.lastPeerID = peerID
             conn.send(message: message)
         }
     }
@@ -247,6 +283,14 @@ public final class NetworkManager: @unchecked Sendable {
             }
             next[peer.id] = peer
         }
+        let previous = Set(discoveredByID.keys)
+        let gone = previous.subtracting(next.keys)
+        for id in gone {
+            lastSeenAt[id] = Date()
+        }
+        for id in next.keys {
+            lastSeenAt[id] = Date()
+        }
         discoveredByID = next
         let snapshot = orderedPeers()
         DispatchQueue.main.async { [onPeersUpdated] in
@@ -255,18 +299,14 @@ public final class NetworkManager: @unchecked Sendable {
     }
 
     private func handleIncoming(_ connection: NWConnection) {
-        if activeConnection != nil {
-            emitLog("[LISTENER] Rejecting inbound connection; already connected. Type 'disconnect' first.")
-            connection.cancel()
-            return
-        }
         emitLog("[LISTENER] Incoming connection from \(connection.endpoint)")
         attach(connection)
     }
 
     private func connect(to peer: DiscoveredPeer) {
-        if activeConnection != nil {
-            emitLog("Already connected. Type 'disconnect' first.")
+        if sessions[peer.id]?.isReadyForMessages == true {
+            emitLog("Already connected to \(peer.displayName).")
+            lastPeerID = peer.id
             return
         }
         emitLog("[CONNECTION] Connecting to \(peer.displayName) · \(peer.shortName)")
@@ -289,14 +329,28 @@ public final class NetworkManager: @unchecked Sendable {
             return try self.store.verifyOrRemember(peerID: payload.peerID, publicKey: payload.publicKey)
         }
         peerConnection.onReadyForChat = { [weak self] peerID in
+            guard let self else { return }
+            self.pending[connectionID] = nil
+            let key = peerID.uuidString
+            if let old = self.sessions[key], old.id != connectionID {
+                old.onStateChange = nil
+                old.cancel()
+            }
+            self.sessions[key] = peerConnection
+            self.lastPeerID = key
             DispatchQueue.main.async { [weak self] in
                 self?.onConnectionEstablished?()
                 self?.onSecureSession?(peerID)
             }
         }
         peerConnection.onMessageReceived = { [weak self] message in
+            guard let self else { return }
+            let peerKey = self.sessions.first(where: { $0.value.id == connectionID })?.key
             DispatchQueue.main.async { [weak self] in
                 self?.onMessageReceived?(message)
+                if let peerKey, let uuid = UUID(uuidString: peerKey) {
+                    self?.onMessageFromPeer?(uuid, message)
+                }
             }
         }
         peerConnection.onStateChange = { [weak self] state in
@@ -306,20 +360,10 @@ public final class NetworkManager: @unchecked Sendable {
                 self.emitLog("[CONNECTION] Transport ready. Completing handshake...")
             case .failed(let error):
                 self.emitLog("[CONNECTION] Failed: \(error)")
-                if self.activeConnection?.id == connectionID {
-                    self.activeConnection = nil
-                    DispatchQueue.main.async { [weak self] in
-                        self?.onDisconnected?()
-                    }
-                }
+                self.removeSession(connectionID: connectionID)
             case .cancelled:
                 self.emitLog("[CONNECTION] Cancelled")
-                if self.activeConnection?.id == connectionID {
-                    self.activeConnection = nil
-                    DispatchQueue.main.async { [weak self] in
-                        self?.onDisconnected?()
-                    }
-                }
+                self.removeSession(connectionID: connectionID)
             case .preparing:
                 self.emitLog("[CONNECTION] Preparing...")
             case .waiting(let error):
@@ -331,8 +375,40 @@ public final class NetworkManager: @unchecked Sendable {
             }
         }
 
-        activeConnection = peerConnection
+        pending[connectionID] = peerConnection
         peerConnection.start()
+    }
+
+    private func disconnectLocked(peerID: String) {
+        if let conn = sessions[peerID] {
+            conn.cancel()
+        }
+        sessions[peerID] = nil
+        if lastPeerID == peerID {
+            lastPeerID = sessions.keys.first
+        }
+        emitLog("[CONNECTION] Disconnected \(peerID.prefix(8)).")
+        DispatchQueue.main.async { [weak self] in
+            self?.onDisconnected?()
+            if let uuid = UUID(uuidString: peerID) {
+                self?.onPeerDisconnected?(uuid)
+            }
+        }
+    }
+
+    private func removeSession(connectionID: UUID) {
+        pending[connectionID] = nil
+        guard let key = sessions.first(where: { $0.value.id == connectionID })?.key else { return }
+        sessions[key] = nil
+        if lastPeerID == key {
+            lastPeerID = sessions.keys.first
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.onDisconnected?()
+            if let uuid = UUID(uuidString: key) {
+                self?.onPeerDisconnected?(uuid)
+            }
+        }
     }
 
     private func scheduleRestart(reason: String) {
@@ -359,8 +435,15 @@ public final class NetworkManager: @unchecked Sendable {
         restartWork?.cancel()
         restartWork = nil
         restartScheduled = false
-        activeConnection?.cancel()
-        activeConnection = nil
+        for session in sessions.values {
+            session.cancel()
+        }
+        for pending in pending.values {
+            pending.cancel()
+        }
+        sessions.removeAll()
+        pending.removeAll()
+        lastPeerID = nil
         listener?.cancel()
         browser?.cancel()
         listener = nil
