@@ -3,7 +3,7 @@ import Network
 
 final class NetworkManager: @unchecked Sendable {
     let serviceType = "_bluecomms._tcp"
-    let serviceDomain = "local."
+    let serviceDomain: String? = nil
     
     var listener: NWListener?
     var browser: NWBrowser?
