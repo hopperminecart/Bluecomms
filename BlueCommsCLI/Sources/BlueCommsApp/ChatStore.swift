@@ -19,6 +19,7 @@ final class ChatStore: ObservableObject {
 
     private var manager: NetworkManager?
     private var connectedPeerID: String?
+    private var archive: MessageArchive?
 
     var selectedPeer: NearbyPeer? {
         peers.first(where: { $0.id == selectedPeerID })
@@ -40,7 +41,13 @@ final class ChatStore: ObservableObject {
             shortID = "08FE967E"
             fingerprint = "CD81-C9EF-1522"
             statusLine = "Demo mode — nearby radios are simulated"
+            archive = try? MessageArchive(directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("bluecomms-demo-archive", isDirectory: true))
+            if let saved = try? archive?.load(), !saved.conversations.isEmpty {
+                conversations = saved.conversations
+            }
             installDemoData()
+            persist()
             return
         }
 
@@ -50,6 +57,10 @@ final class ChatStore: ObservableObject {
         shortID = manager.shortID
         fingerprint = manager.fingerprint
         statusLine = "Starting local radio…"
+        archive = try MessageArchive(directory: IdentityStore.defaultDirectory)
+        if let saved = try? archive?.load() {
+            conversations = saved.conversations
+        }
         bind(manager)
         manager.start()
     }
@@ -64,6 +75,7 @@ final class ChatStore: ObservableObject {
             connectedPeerID = peer.id
             phase = .ready
             statusLine = "Secure session with \(peer.displayName)"
+            flushOutbound(for: peer.id)
             return
         }
         phase = .connecting
@@ -85,15 +97,21 @@ final class ChatStore: ObservableObject {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let peerID = selectedPeerID else { return }
         draft = ""
-        append(ChatMessage(peerID: peerID, text: text, isLocal: true))
-        if isDemo {
-            return
-        }
-        if isConnectedToSelection {
-            manager?.send(message: text)
+        let deliverNow = isConnectedToSelection
+        append(ChatMessage(
+            peerID: peerID,
+            text: text,
+            isLocal: true,
+            delivery: deliverNow ? .sent : .queued
+        ))
+        if deliverNow {
+            if !isDemo {
+                manager?.send(message: text)
+            }
         } else {
-            statusLine = "Not connected. Click Connect to deliver this."
+            statusLine = "Queued. It will send when this peer is back."
         }
+        persist()
     }
 
     func stop() {
@@ -118,6 +136,7 @@ final class ChatStore: ObservableObject {
                 self?.phase = .ready
                 let name = self?.peers.first(where: { $0.id == peerID.uuidString })?.displayName ?? "peer"
                 self?.statusLine = "Secure session with \(name)"
+                self?.flushOutbound(for: peerID.uuidString)
             }
         }
         manager.onDisconnected = { [weak self] in
@@ -132,6 +151,7 @@ final class ChatStore: ObservableObject {
                 guard let self else { return }
                 let peerID = self.connectedPeerID ?? self.selectedPeerID ?? "unknown"
                 self.append(ChatMessage(peerID: peerID, text: text, isLocal: false))
+                self.persist()
             }
         }
         manager.onLog = { [weak self] line in
@@ -148,6 +168,31 @@ final class ChatStore: ObservableObject {
         conversations[message.peerID, default: []].append(message)
     }
 
+    private func persist() {
+        let snapshot = ConversationSnapshot(
+            conversations: conversations,
+            outboundIDs: conversations.values.flatMap { $0 }.filter { $0.delivery == .queued }.map(\.id)
+        )
+        try? archive?.save(snapshot)
+    }
+
+    private func flushOutbound(for peerID: String) {
+        guard var thread = conversations[peerID] else { return }
+        var sentAny = false
+        for index in thread.indices where thread[index].delivery == .queued && thread[index].isLocal {
+            if !isDemo {
+                manager?.send(message: thread[index].text)
+            }
+            thread[index].delivery = .sent
+            sentAny = true
+        }
+        conversations[peerID] = thread
+        if sentAny {
+            statusLine = "Delivered queued messages to this peer."
+        }
+        persist()
+    }
+
     private func installDemoData() {
         let harsh = NearbyPeer(
             id: "E5F6A1B2-1111-2222-3333-444444444444",
@@ -162,17 +207,28 @@ final class ChatStore: ObservableObject {
             isOnline: true
         )
         peers = [harsh, studio]
-        selectedPeerID = harsh.id
-        connectedPeerID = harsh.id
-        phase = .ready
-        conversations[harsh.id] = [
-            ChatMessage(peerID: harsh.id, text: "You on AWDL?", isLocal: false, sentAt: Date().addingTimeInterval(-420)),
-            ChatMessage(peerID: harsh.id, text: "Yeah. Wi-Fi on, no router. Fingerprints matched.", isLocal: true, sentAt: Date().addingTimeInterval(-400)),
-            ChatMessage(peerID: harsh.id, text: "First send used to kill the socket. This one is still up.", isLocal: false, sentAt: Date().addingTimeInterval(-360)),
-            ChatMessage(peerID: harsh.id, text: "Sending a real message from the Mac app now.", isLocal: true, sentAt: Date().addingTimeInterval(-20)),
-        ]
-        conversations[studio.id] = [
-            ChatMessage(peerID: studio.id, text: "Last seen downstairs.", isLocal: false, sentAt: Date().addingTimeInterval(-3600)),
-        ]
+        selectedPeerID = studio.id
+        connectedPeerID = nil
+        phase = .idle
+        if conversations[harsh.id] == nil {
+            conversations[harsh.id] = [
+                ChatMessage(peerID: harsh.id, text: "You on AWDL?", isLocal: false, sentAt: Date().addingTimeInterval(-420)),
+                ChatMessage(peerID: harsh.id, text: "Yeah. Wi-Fi on, no router. Fingerprints matched.", isLocal: true, sentAt: Date().addingTimeInterval(-400)),
+                ChatMessage(peerID: harsh.id, text: "First send used to kill the socket. This one is still up.", isLocal: false, sentAt: Date().addingTimeInterval(-360)),
+                ChatMessage(peerID: harsh.id, text: "Sending a real message from the Mac app now.", isLocal: true, sentAt: Date().addingTimeInterval(-20)),
+            ]
+        }
+        if conversations[studio.id] == nil {
+            conversations[studio.id] = [
+                ChatMessage(peerID: studio.id, text: "Last seen downstairs.", isLocal: false, sentAt: Date().addingTimeInterval(-3600)),
+                ChatMessage(
+                    peerID: studio.id,
+                    text: "Ping me when you are back upstairs.",
+                    isLocal: true,
+                    sentAt: Date().addingTimeInterval(-90),
+                    delivery: .queued
+                ),
+            ]
+        }
     }
 }
