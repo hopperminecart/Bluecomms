@@ -4,6 +4,7 @@ import Foundation
 public enum WireType: UInt8, Sendable {
     case handshake = 0x01
     case ciphertext = 0x02
+    case file = 0x03
 }
 
 public enum CryptoError: Error, Equatable, Sendable {

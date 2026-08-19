@@ -36,6 +36,7 @@ public final class NetworkManager: @unchecked Sendable {
     public var onPeerDisconnected: ((UUID) -> Void)?
     public var onMessageReceived: ((String) -> Void)?
     public var onMessageFromPeer: ((UUID, String) -> Void)?
+    public var onFileTransfer: ((UUID, FileTransferUpdate) -> Void)?
     public var onLog: ((String) -> Void)?
 
     public var deviceID: UUID { identity.id }
@@ -178,6 +179,17 @@ public final class NetworkManager: @unchecked Sendable {
             }
             self.lastPeerID = peerID
             conn.send(message: message)
+        }
+    }
+
+    public func send(file url: URL, to peerID: String, id: UUID = UUID()) {
+        onQueueAsync {
+            guard let conn = self.sessions[peerID], conn.isReadyForMessages else {
+                self.emitLog("No session with that peer. Connect first, then send the file.")
+                return
+            }
+            self.lastPeerID = peerID
+            conn.sendFile(at: url, id: id)
         }
     }
 
@@ -348,6 +360,16 @@ public final class NetworkManager: @unchecked Sendable {
                 self?.onMessageReceived?(message)
                 if let peerKey, let uuid = UUID(uuidString: peerKey) {
                     self?.onMessageFromPeer?(uuid, message)
+                }
+            }
+        }
+        peerConnection.onFileTransfer = { [weak self] update in
+            guard let self else { return }
+            let peerKey = self.sessions.first(where: { $0.value.id == connectionID })?.key
+                ?? self.lastPeerID
+            DispatchQueue.main.async { [weak self] in
+                if let peerKey, let uuid = UUID(uuidString: peerKey) {
+                    self?.onFileTransfer?(uuid, update)
                 }
             }
         }

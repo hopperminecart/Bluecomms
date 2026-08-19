@@ -32,6 +32,11 @@ struct BlueCommsSelfTest {
             ("archive round trip", testArchiveRoundTrip),
             ("archive empty load", testArchiveEmptyLoad),
             ("archive rejects wrong key", testArchiveWrongKey),
+            ("file offer round trip", testFileOfferRoundTrip),
+            ("file chunk round trip", testFileChunkRoundTrip),
+            ("file name sanitizes slashes", testFileNameSanitize),
+            ("file offer rejects huge size", testFileOfferRejectsHugeSize),
+            ("file stream reassembles with matching hash", testFileStreamReassembles),
         ]
 
         for (name, body) in cases {
@@ -299,4 +304,73 @@ private func testArchiveWrongKey() throws {
     } catch {
         // AES-GCM open failure is the success path
     }
+}
+
+private func testFileOfferRoundTrip() throws {
+    let id = UUID()
+    let encoded = try FileMessage.offer(id: id, size: 540_000_000, name: "clip.mov").encoded()
+    guard case .offer(let decodedID, let size, let name) = try FileMessage.decode(encoded) else {
+        throw Failure(message: "expected offer")
+    }
+    try expectEqual(decodedID, id)
+    try expectEqual(size, 540_000_000)
+    try expectEqual(name, "clip.mov")
+}
+
+private func testFileChunkRoundTrip() throws {
+    let id = UUID()
+    let payload = Data(repeating: 0xAB, count: 4096)
+    let encoded = try FileMessage.chunk(id: id, offset: 256 * 1024, data: payload).encoded()
+    guard case .chunk(let decodedID, let offset, let data) = try FileMessage.decode(encoded) else {
+        throw Failure(message: "expected chunk")
+    }
+    try expectEqual(decodedID, id)
+    try expectEqual(offset, UInt64(256 * 1024))
+    try expectEqual(data, payload)
+}
+
+private func testFileNameSanitize() throws {
+    try expectEqual(sanitizeFileName("../../etc/passwd"), "..-..-etc-passwd")
+    try expectEqual(sanitizeFileName("   "), "file")
+}
+
+private func testFileOfferRejectsHugeSize() throws {
+    var data = try FileMessage.offer(id: UUID(), size: 1, name: "x").encoded()
+    // size sits at bytes 17..<25 after opcode + uuid
+    let huge = FileMessage.maxFileSize + 1
+    data.replaceSubrange(17..<25, with: uInt64Bytes(huge))
+    try expectThrows({ try FileMessage.decode(data) }, as: FileTransferError.badMessage)
+}
+
+private func testFileStreamReassembles() throws {
+    var payload = Data(count: FileMessage.chunkSize + 1200)
+    for index in payload.indices {
+        payload[index] = UInt8(index % 251)
+    }
+    let id = UUID()
+    var received = Data()
+    var sendHasher = SHA256()
+    var recvHasher = SHA256()
+    var offset = 0
+    while offset < payload.count {
+        let end = min(offset + FileMessage.chunkSize, payload.count)
+        let piece = payload.subdata(in: offset..<end)
+        sendHasher.update(data: piece)
+        let encoded = try FileMessage.chunk(id: id, offset: UInt64(offset), data: piece).encoded()
+        guard case .chunk(_, let decodedOffset, let data) = try FileMessage.decode(encoded) else {
+            throw Failure(message: "chunk did not decode")
+        }
+        try expectEqual(decodedOffset, UInt64(offset))
+        received.append(data)
+        recvHasher.update(data: data)
+        offset = end
+    }
+    let sendDigest = Data(sendHasher.finalize())
+    let complete = try FileMessage.complete(id: id, sha256: sendDigest).encoded()
+    guard case .complete(_, let digest) = try FileMessage.decode(complete) else {
+        throw Failure(message: "complete did not decode")
+    }
+    try expectEqual(received, payload)
+    try expectEqual(digest, Data(recvHasher.finalize()))
+    try expectEqual(digest, sendDigest)
 }

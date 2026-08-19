@@ -7,7 +7,7 @@ public enum FrameError: Error, Equatable, Sendable {
 
 public enum FrameCodec: Sendable {
     public static let headerSize = 4
-    public static let maxPayloadSize = 65_536
+    public static let maxPayloadSize = 524_288
 
     public static func encode(_ payload: Data) throws -> Data {
         guard payload.count <= maxPayloadSize else {

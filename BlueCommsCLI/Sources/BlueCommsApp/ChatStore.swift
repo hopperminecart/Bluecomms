@@ -131,6 +131,58 @@ final class ChatStore: ObservableObject {
         persist()
     }
 
+    func sendFile(url: URL) {
+        guard let peerID = selectedPeerID else { return }
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        let size = UInt64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        let name = url.lastPathComponent
+        let transferID = UUID()
+        let deliverNow = isConnectedToSelection
+        append(ChatMessage(
+            peerID: peerID,
+            text: name,
+            isLocal: true,
+            delivery: deliverNow ? .sent : .queued,
+            kind: .file,
+            fileName: name,
+            fileSize: size,
+            filePath: url.path,
+            transferID: transferID,
+            progress: 0,
+            fileState: deliverNow ? .transferring : .queued
+        ))
+        if deliverNow, !isDemo {
+            manager?.send(file: url, to: peerID, id: transferID)
+            statusLine = "Sending \(name)…"
+        } else if isDemo {
+            applyFileUpdate(
+                peerID: UUID(uuidString: peerID) ?? UUID(),
+                update: FileTransferUpdate(
+                    transferID: transferID,
+                    name: name,
+                    size: size,
+                    bytes: size,
+                    isOutgoing: true,
+                    state: .complete,
+                    localURL: url,
+                    error: nil
+                )
+            )
+        } else {
+            statusLine = "File queued. Connect to send \(name)."
+        }
+        persist()
+    }
+
+    func sendScreenshot() {
+        guard let url = ScreenGrab.savePNG() else {
+            statusLine = "Could not capture the screen. Grant Screen Recording in System Settings if asked."
+            return
+        }
+        sendFile(url: url)
+    }
+
     func stop() {
         manager?.stop()
     }
@@ -171,6 +223,11 @@ final class ChatStore: ObservableObject {
                 self.persist()
             }
         }
+        manager.onFileTransfer = { [weak self] peerID, update in
+            Task { @MainActor in
+                self?.applyFileUpdate(peerID: peerID, update: update)
+            }
+        }
         manager.onLog = { [weak self] line in
             Task { @MainActor in
                 self?.logs.append(line)
@@ -185,6 +242,41 @@ final class ChatStore: ObservableObject {
         conversations[message.peerID, default: []].append(message)
     }
 
+    private func applyFileUpdate(peerID: UUID, update: FileTransferUpdate) {
+        let key = peerID.uuidString
+        if let index = conversations[key]?.firstIndex(where: { $0.transferID == update.transferID }) {
+            conversations[key]?[index].progress = update.progress
+            conversations[key]?[index].fileState = update.state
+            if let path = update.localURL?.path {
+                conversations[key]?[index].filePath = path
+            }
+            if update.state == .complete {
+                conversations[key]?[index].delivery = .sent
+                persist()
+            }
+            if update.state == .failed || update.state == .cancelled {
+                persist()
+                statusLine = update.error ?? "File transfer failed"
+            }
+            return
+        }
+        if !update.isOutgoing {
+            append(ChatMessage(
+                peerID: key,
+                text: update.name,
+                isLocal: false,
+                kind: .file,
+                fileName: update.name,
+                fileSize: update.size,
+                filePath: update.localURL?.path,
+                transferID: update.transferID,
+                progress: update.progress,
+                fileState: update.state
+            ))
+            if update.state == .complete { persist() }
+        }
+    }
+
     private func persist() {
         let snapshot = ConversationSnapshot(
             conversations: conversations,
@@ -197,7 +289,16 @@ final class ChatStore: ObservableObject {
         guard var thread = conversations[peerID] else { return }
         var sentAny = false
         for index in thread.indices where thread[index].delivery == .queued && thread[index].isLocal {
-            if !isDemo {
+            if thread[index].kind == .file {
+                if !isDemo, let path = thread[index].filePath {
+                    manager?.send(
+                        file: URL(fileURLWithPath: path),
+                        to: peerID,
+                        id: thread[index].transferID ?? UUID()
+                    )
+                }
+                thread[index].fileState = .transferring
+            } else if !isDemo {
                 manager?.send(message: thread[index].text, to: peerID)
             }
             thread[index].delivery = .sent
@@ -303,6 +404,22 @@ final class ChatStore: ObservableObject {
                     delivery: .queued
                 ),
             ]
+        }
+        if conversations[harsh.id]?.contains(where: { $0.kind == .file }) != true {
+            conversations[harsh.id, default: []].append(
+                ChatMessage(
+                    peerID: harsh.id,
+                    text: "clip.mov",
+                    isLocal: true,
+                    sentAt: Date().addingTimeInterval(-8),
+                    kind: .file,
+                    fileName: "clip.mov",
+                    fileSize: 540 * 1024 * 1024,
+                    transferID: UUID(),
+                    progress: 0.62,
+                    fileState: .transferring
+                )
+            )
         }
     }
 }
