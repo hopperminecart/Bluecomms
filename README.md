@@ -17,6 +17,8 @@ Run it on two Macs on the same LAN, or on two Macs with Wi-Fi on and no access p
 
 The first launch creates `~/.bluecomms/` (device id, identity key, known-peer list, encrypted conversation archive) with `0700` / `0600` permissions. Chat history survives quit. Messages typed while a peer is gone stay queued and flush when that session comes back. You can keep a live session with more than one peer; the sidebar shows online vs last-seen.
 
+Photos, screenshots, and videos send as **chunked encrypted files** (256 KB pieces, up to **8 GB**). Drop a file on the thread, use Attach, or Screenshot. Incoming files land in `~/Downloads/BlueComms`. Same radio range as AirDrop — not the internet. A 500 MB–1 GB clip is fine if both Macs stay nearby until it finishes.
+
 ## Local Network permission
 
 macOS will not let a process browse Bonjour until it has Local Network access.

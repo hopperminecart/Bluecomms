@@ -39,7 +39,7 @@ final class ChatStore: ObservableObject {
         try! ChatStore(demo: true)
     }
 
-    init(demo: Bool) throws {
+    init(demo: Bool, dataDirectory: URL? = nil) throws {
         isDemo = demo
         if demo {
             localName = "Rishi’s MacBook Air"
@@ -56,18 +56,22 @@ final class ChatStore: ObservableObject {
             return
         }
 
-        let manager = try NetworkManager()
+        let directory = dataDirectory ?? IdentityStore.defaultDirectory
+        let manager = try NetworkManager(store: IdentityStore(directory: directory))
         self.manager = manager
         localName = manager.deviceName
         shortID = manager.shortID
         fingerprint = manager.fingerprint
         statusLine = "Starting local radio…"
-        archive = try MessageArchive(directory: IdentityStore.defaultDirectory)
+        archive = try MessageArchive(directory: directory)
         if let saved = try? archive?.load() {
             conversations = saved.conversations
         }
         bind(manager)
-        manager.start()
+    }
+
+    func start() {
+        manager?.start()
     }
 
     func select(peerID: String) {
@@ -131,6 +135,138 @@ final class ChatStore: ObservableObject {
         persist()
     }
 
+    func sendFile(url: URL) {
+        guard let peerID = selectedPeerID else { return }
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        let size = UInt64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        let name = url.lastPathComponent
+        let transferID = UUID()
+        let deliverNow = isConnectedToSelection
+        append(ChatMessage(
+            peerID: peerID,
+            text: name,
+            isLocal: true,
+            delivery: deliverNow ? .sent : .queued,
+            kind: .file,
+            fileName: name,
+            fileSize: size,
+            filePath: url.path,
+            transferID: transferID,
+            progress: 0,
+            fileState: deliverNow ? .transferring : .queued
+        ))
+        if deliverNow, !isDemo {
+            manager?.send(file: url, to: peerID, id: transferID)
+            statusLine = "Sending \(name)…"
+        } else if isDemo {
+            applyFileUpdate(
+                peerID: UUID(uuidString: peerID) ?? UUID(),
+                update: FileTransferUpdate(
+                    transferID: transferID,
+                    name: name,
+                    size: size,
+                    bytes: size,
+                    isOutgoing: true,
+                    state: .complete,
+                    localURL: url,
+                    error: nil
+                )
+            )
+        } else {
+            statusLine = "File queued. Connect to send \(name)."
+        }
+        persist()
+    }
+
+    func playSendReceiveDemo() {
+        Task { @MainActor in
+            let harshID = selectedPeerID ?? peers.first?.id ?? "demo"
+            select(peerID: harshID)
+            let shotID = UUID()
+            append(ChatMessage(
+                peerID: harshID,
+                text: "screenshot.png",
+                isLocal: true,
+                kind: .file,
+                fileName: "screenshot.png",
+                fileSize: 2_400_000,
+                transferID: shotID,
+                progress: 0,
+                fileState: .transferring
+            ))
+            statusLine = "Sending screenshot.png…"
+            for step in 1...20 {
+                try? await Task.sleep(nanoseconds: 180_000_000)
+                if let index = conversations[harshID]?.firstIndex(where: { $0.transferID == shotID }) {
+                    conversations[harshID]?[index].progress = Double(step) / 20
+                    if step == 20 {
+                        conversations[harshID]?[index].fileState = .complete
+                    }
+                }
+            }
+            statusLine = "Screenshot delivered. Receiving clip.mp4…"
+            let clipID = UUID()
+            append(ChatMessage(
+                peerID: harshID,
+                text: "clip.mp4",
+                isLocal: false,
+                kind: .file,
+                fileName: "clip.mp4",
+                fileSize: 540 * 1024 * 1024,
+                transferID: clipID,
+                progress: 0,
+                fileState: .transferring
+            ))
+            for step in 1...20 {
+                try? await Task.sleep(nanoseconds: 180_000_000)
+                if let index = conversations[harshID]?.firstIndex(where: { $0.transferID == clipID }) {
+                    conversations[harshID]?[index].progress = Double(step) / 20
+                    if step == 20 {
+                        conversations[harshID]?[index].fileState = .complete
+                    }
+                }
+            }
+            statusLine = "Received clip.mp4"
+        }
+    }
+
+    func runSendReceiveTest(files: [URL]) {
+        Task { @MainActor in
+            statusLine = "Waiting for a nearby peer…"
+            for _ in 0..<40 {
+                if !peers.isEmpty { break }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            guard let peer = peers.first else {
+                statusLine = "No peer appeared for the send/receive test."
+                return
+            }
+            select(peerID: peer.id)
+            connectToSelection()
+            for _ in 0..<40 {
+                if isConnectedToSelection { break }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            guard isConnectedToSelection else {
+                statusLine = "Could not open a session for the send/receive test."
+                return
+            }
+            for file in files {
+                sendFile(url: file)
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
+        }
+    }
+
+    func sendScreenshot() {
+        guard let url = ScreenGrab.savePNG() else {
+            statusLine = "Could not capture the screen. Grant Screen Recording in System Settings if asked."
+            return
+        }
+        sendFile(url: url)
+    }
+
     func stop() {
         manager?.stop()
     }
@@ -171,6 +307,11 @@ final class ChatStore: ObservableObject {
                 self.persist()
             }
         }
+        manager.onFileTransfer = { [weak self] peerID, update in
+            Task { @MainActor in
+                self?.applyFileUpdate(peerID: peerID, update: update)
+            }
+        }
         manager.onLog = { [weak self] line in
             Task { @MainActor in
                 self?.logs.append(line)
@@ -185,6 +326,41 @@ final class ChatStore: ObservableObject {
         conversations[message.peerID, default: []].append(message)
     }
 
+    private func applyFileUpdate(peerID: UUID, update: FileTransferUpdate) {
+        let key = peerID.uuidString
+        if let index = conversations[key]?.firstIndex(where: { $0.transferID == update.transferID }) {
+            conversations[key]?[index].progress = update.progress
+            conversations[key]?[index].fileState = update.state
+            if let path = update.localURL?.path {
+                conversations[key]?[index].filePath = path
+            }
+            if update.state == .complete {
+                conversations[key]?[index].delivery = .sent
+                persist()
+            }
+            if update.state == .failed || update.state == .cancelled {
+                persist()
+                statusLine = update.error ?? "File transfer failed"
+            }
+            return
+        }
+        if !update.isOutgoing {
+            append(ChatMessage(
+                peerID: key,
+                text: update.name,
+                isLocal: false,
+                kind: .file,
+                fileName: update.name,
+                fileSize: update.size,
+                filePath: update.localURL?.path,
+                transferID: update.transferID,
+                progress: update.progress,
+                fileState: update.state
+            ))
+            if update.state == .complete { persist() }
+        }
+    }
+
     private func persist() {
         let snapshot = ConversationSnapshot(
             conversations: conversations,
@@ -197,7 +373,16 @@ final class ChatStore: ObservableObject {
         guard var thread = conversations[peerID] else { return }
         var sentAny = false
         for index in thread.indices where thread[index].delivery == .queued && thread[index].isLocal {
-            if !isDemo {
+            if thread[index].kind == .file {
+                if !isDemo, let path = thread[index].filePath {
+                    manager?.send(
+                        file: URL(fileURLWithPath: path),
+                        to: peerID,
+                        id: thread[index].transferID ?? UUID()
+                    )
+                }
+                thread[index].fileState = .transferring
+            } else if !isDemo {
                 manager?.send(message: thread[index].text, to: peerID)
             }
             thread[index].delivery = .sent
@@ -303,6 +488,22 @@ final class ChatStore: ObservableObject {
                     delivery: .queued
                 ),
             ]
+        }
+        if conversations[harsh.id]?.contains(where: { $0.kind == .file }) != true {
+            conversations[harsh.id, default: []].append(
+                ChatMessage(
+                    peerID: harsh.id,
+                    text: "clip.mov",
+                    isLocal: true,
+                    sentAt: Date().addingTimeInterval(-8),
+                    kind: .file,
+                    fileName: "clip.mov",
+                    fileSize: 540 * 1024 * 1024,
+                    transferID: UUID(),
+                    progress: 0.62,
+                    fileState: .transferring
+                )
+            )
         }
     }
 }

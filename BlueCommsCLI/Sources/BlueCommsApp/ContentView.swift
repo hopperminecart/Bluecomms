@@ -1,5 +1,7 @@
+import AppKit
 import BlueCommsCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject private var store: ChatStore
@@ -140,6 +142,7 @@ private struct ChatView: View {
             composer
         }
         .background(Palette.bg)
+        .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
     }
 
     @ViewBuilder
@@ -208,9 +211,15 @@ private struct ChatView: View {
         }
     }
 
+    @State private var pickingFile = false
+
     private var composer: some View {
-        HStack(spacing: 10) {
-            TextField("Message", text: $store.draft, axis: .vertical)
+        HStack(spacing: 8) {
+            Button("Attach") { pickingFile = true }
+                .disabled(store.selectedPeerID == nil)
+            Button("Screenshot") { store.sendScreenshot() }
+                .disabled(store.selectedPeerID == nil)
+            TextField("Message or drop a photo / video here", text: $store.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -222,6 +231,23 @@ private struct ChatView: View {
                 .disabled(store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.selectedPeerID == nil)
         }
         .padding(16)
+        .fileImporter(isPresented: $pickingFile, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result {
+                urls.forEach { store.sendFile(url: $0) }
+            }
+        }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        var accepted = false
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            accepted = true
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                DispatchQueue.main.async { store.sendFile(url: url) }
+            }
+        }
+        return accepted
     }
 
     private func empty(_ text: String) -> some View {
@@ -240,27 +266,107 @@ private struct MessageBubble: View {
         HStack {
             if message.isLocal { Spacer(minLength: 80) }
             VStack(alignment: message.isLocal ? .trailing : .leading, spacing: 4) {
-                Text(message.text)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Palette.text)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(message.isLocal ? Palette.localBubble : Palette.remoteBubble)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                if message.kind == .file {
+                    fileCard
+                } else {
+                    Text(message.text)
+                        .font(.system(size: 14))
+                        .foregroundStyle(Palette.text)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(message.isLocal ? Palette.localBubble : Palette.remoteBubble)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
                 Text(caption(for: message))
                     .font(.system(size: 10))
-                    .foregroundStyle(message.delivery == .queued ? Palette.accent : Palette.muted)
+                    .foregroundStyle(captionColor)
             }
             if !message.isLocal { Spacer(minLength: 80) }
         }
     }
 
+    private var fileCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(isImage ? "Photo" : (isVideo ? "Video" : "File"))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Palette.muted)
+                Spacer()
+                Text(byteCount)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Palette.muted)
+            }
+            Text(message.fileName ?? message.text)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Palette.text)
+                .lineLimit(2)
+            if message.fileState == .transferring || (message.fileState == .queued && message.progress < 1) {
+                ProgressView(value: message.progress)
+                    .tint(Palette.accent)
+                Text("\(Int(message.progress * 100))% · \(byteCount(of: UInt64(Double(message.fileSize ?? 0) * message.progress))) of \(byteCount)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+            }
+            if message.fileState == .complete, message.filePath != nil {
+                Button("Open") { openFile() }
+                    .buttonStyle(.bordered)
+            }
+            if message.fileState == .failed {
+                Text("Transfer failed")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(12)
+        .frame(minWidth: 240, maxWidth: 320, alignment: .leading)
+        .background(message.isLocal ? Palette.localBubble : Palette.remoteBubble)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var isImage: Bool {
+        let ext = (message.fileName as NSString?)?.pathExtension.lowercased() ?? ""
+        return ["png", "jpg", "jpeg", "heic", "gif", "webp", "tif", "tiff"].contains(ext)
+    }
+
+    private var isVideo: Bool {
+        let ext = (message.fileName as NSString?)?.pathExtension.lowercased() ?? ""
+        return ["mov", "mp4", "m4v", "avi", "mkv"].contains(ext)
+    }
+
+    private var byteCount: String {
+        byteCount(of: message.fileSize ?? 0)
+    }
+
+    private func byteCount(of value: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .file)
+    }
+
+    private var captionColor: Color {
+        if message.delivery == .queued || message.fileState == .queued { return Palette.accent }
+        return Palette.muted
+    }
+
     private func caption(for message: ChatMessage) -> String {
         let time = message.sentAt.formatted(date: .omitted, time: .shortened)
+        if message.kind == .file {
+            switch message.fileState {
+            case .queued: return "\(time) · Queued — sends when they are back"
+            case .transferring: return "\(time) · Sending over AWDL"
+            case .complete: return "\(time) · Saved"
+            case .failed: return "\(time) · Failed"
+            case .cancelled: return "\(time) · Cancelled"
+            case .none: break
+            }
+        }
         if message.delivery == .queued {
             return "\(time) · Queued — sends when they are back"
         }
         return time
+    }
+
+    private func openFile() {
+        guard let path = message.filePath else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 }
 
