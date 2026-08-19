@@ -17,6 +17,7 @@ final class PeerConnection: @unchecked Sendable {
     private var crypto: CryptoSession
     private var handshakeSent = false
     private var handshakeReceived = false
+    private var receiving = false
     private var outboundQueue: [String] = []
     private var closed = false
     private var handshakeTimeoutWork: DispatchWorkItem?
@@ -43,7 +44,10 @@ final class PeerConnection: @unchecked Sendable {
             self.onStateChange?(state)
             if state == .ready {
                 self.sendHandshake()
-                self.receiveLoop()
+                if !self.receiving {
+                    self.receiving = true
+                    self.receiveLoop()
+                }
             }
             if Self.isTerminal(state) {
                 self.closed = true
