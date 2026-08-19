@@ -18,7 +18,7 @@ final class ChatStore: ObservableObject {
     let isDemo: Bool
 
     private var manager: NetworkManager?
-    private var connectedPeerID: String?
+    private var connectedIDs: Set<String> = []
     private var archive: MessageArchive?
 
     var selectedPeer: NearbyPeer? {
@@ -31,7 +31,12 @@ final class ChatStore: ObservableObject {
     }
 
     var isConnectedToSelection: Bool {
-        phase == .ready && connectedPeerID == selectedPeerID
+        guard let selectedPeerID else { return false }
+        return connectedIDs.contains(selectedPeerID)
+    }
+
+    static var placeholder: ChatStore {
+        try! ChatStore(demo: true)
     }
 
     init(demo: Bool) throws {
@@ -71,9 +76,14 @@ final class ChatStore: ObservableObject {
 
     func connectToSelection() {
         guard let peer = selectedPeer else { return }
+        guard peer.isOnline else {
+            statusLine = "That peer is not nearby. The message will stay queued."
+            return
+        }
         if isDemo {
-            connectedPeerID = peer.id
-            phase = .ready
+            connectedIDs.insert(peer.id)
+            markSession(peerID: peer.id, open: true)
+            phase = connectedIDs.isEmpty ? .idle : .ready
             statusLine = "Secure session with \(peer.displayName)"
             flushOutbound(for: peer.id)
             return
@@ -85,12 +95,19 @@ final class ChatStore: ObservableObject {
 
     func disconnect() {
         if isDemo {
-            connectedPeerID = nil
-            phase = .idle
-            statusLine = "Demo mode — nearby radios are simulated"
+            if let id = selectedPeerID {
+                connectedIDs.remove(id)
+                markSession(peerID: id, open: false)
+            }
+            phase = connectedIDs.isEmpty ? .idle : .ready
+            statusLine = "Disconnected this peer. Other sessions stay up."
             return
         }
-        manager?.disconnect()
+        if let id = selectedPeerID {
+            manager?.disconnect(from: id)
+        } else {
+            manager?.disconnect()
+        }
     }
 
     func sendDraft() {
@@ -106,7 +123,7 @@ final class ChatStore: ObservableObject {
         ))
         if deliverNow {
             if !isDemo {
-                manager?.send(message: text)
+                manager?.send(message: text, to: peerID)
             }
         } else {
             statusLine = "Queued. It will send when this peer is back."
@@ -121,36 +138,36 @@ final class ChatStore: ObservableObject {
     private func bind(_ manager: NetworkManager) {
         manager.onPeersUpdated = { [weak self] discovered in
             Task { @MainActor in
-                self?.peers = discovered.map {
-                    NearbyPeer(id: $0.id, displayName: $0.displayName, shortName: $0.shortName, isOnline: true)
-                }
-                if self?.peers.isEmpty == false, self?.statusLine.contains("Starting") == true {
-                    self?.statusLine = "Nearby peers updated"
-                }
+                self?.mergePresence(discovered)
             }
         }
         manager.onSecureSession = { [weak self] peerID in
             Task { @MainActor in
-                self?.connectedPeerID = peerID.uuidString
-                self?.selectedPeerID = peerID.uuidString
-                self?.phase = .ready
-                let name = self?.peers.first(where: { $0.id == peerID.uuidString })?.displayName ?? "peer"
-                self?.statusLine = "Secure session with \(name)"
-                self?.flushOutbound(for: peerID.uuidString)
+                guard let self else { return }
+                let key = peerID.uuidString
+                self.ensurePeer(id: key)
+                self.connectedIDs.insert(key)
+                self.markSession(peerID: key, open: true)
+                self.selectedPeerID = key
+                self.phase = .ready
+                let name = self.peers.first(where: { $0.id == key })?.displayName ?? "peer"
+                self.statusLine = "Secure session with \(name)"
+                self.flushOutbound(for: key)
             }
         }
-        manager.onDisconnected = { [weak self] in
+        manager.onPeerDisconnected = { [weak self] peerID in
             Task { @MainActor in
-                self?.connectedPeerID = nil
-                self?.phase = .idle
-                self?.statusLine = "Disconnected"
+                let key = peerID.uuidString
+                self?.connectedIDs.remove(key)
+                self?.markSession(peerID: key, open: false)
+                self?.phase = self?.connectedIDs.isEmpty == true ? .idle : .ready
+                self?.statusLine = "Disconnected \(key.prefix(8))"
             }
         }
-        manager.onMessageReceived = { [weak self] text in
+        manager.onMessageFromPeer = { [weak self] peerID, text in
             Task { @MainActor in
                 guard let self else { return }
-                let peerID = self.connectedPeerID ?? self.selectedPeerID ?? "unknown"
-                self.append(ChatMessage(peerID: peerID, text: text, isLocal: false))
+                self.append(ChatMessage(peerID: peerID.uuidString, text: text, isLocal: false))
                 self.persist()
             }
         }
@@ -181,7 +198,7 @@ final class ChatStore: ObservableObject {
         var sentAny = false
         for index in thread.indices where thread[index].delivery == .queued && thread[index].isLocal {
             if !isDemo {
-                manager?.send(message: thread[index].text)
+                manager?.send(message: thread[index].text, to: peerID)
             }
             thread[index].delivery = .sent
             sentAny = true
@@ -193,23 +210,80 @@ final class ChatStore: ObservableObject {
         persist()
     }
 
+    private func mergePresence(_ discovered: [DiscoveredPeer]) {
+        let onlineIDs = Set(discovered.map(\.id))
+        let now = Date()
+        for peer in discovered {
+            if let index = peers.firstIndex(where: { $0.id == peer.id }) {
+                peers[index].isOnline = true
+            } else {
+                peers.append(
+                    NearbyPeer(
+                        id: peer.id,
+                        displayName: peer.displayName,
+                        shortName: peer.shortName,
+                        isOnline: true,
+                        lastSeen: now,
+                        isSessionOpen: connectedIDs.contains(peer.id)
+                    )
+                )
+            }
+        }
+        for index in peers.indices where !onlineIDs.contains(peers[index].id) {
+            if peers[index].isOnline {
+                peers[index].isOnline = false
+                peers[index].lastSeen = now
+            }
+        }
+        if !peers.isEmpty, statusLine.contains("Starting") {
+            statusLine = "Nearby peers updated"
+        }
+    }
+
+    private func markSession(peerID: String, open: Bool) {
+        if let index = peers.firstIndex(where: { $0.id == peerID }) {
+            peers[index].isSessionOpen = open
+        }
+    }
+
+    private func ensurePeer(id: String) {
+        guard peers.contains(where: { $0.id == id }) else {
+            let short = String(id.replacingOccurrences(of: "-", with: "").prefix(8))
+            peers.append(
+                NearbyPeer(
+                    id: id,
+                    displayName: "Peer \(short)",
+                    shortName: short,
+                    isOnline: true,
+                    lastSeen: Date(),
+                    isSessionOpen: true
+                )
+            )
+            return
+        }
+    }
+
     private func installDemoData() {
         let harsh = NearbyPeer(
             id: "E5F6A1B2-1111-2222-3333-444444444444",
             displayName: "Harsh’s MacBook Air",
             shortName: "E5F6A1B2",
-            isOnline: true
+            isOnline: true,
+            lastSeen: Date(),
+            isSessionOpen: true
         )
         let studio = NearbyPeer(
             id: "91AA20CC-AAAA-BBBB-CCCC-DDDDDDDDDDDD",
             displayName: "Studio Mac mini",
             shortName: "91AA20CC",
-            isOnline: true
+            isOnline: false,
+            lastSeen: Date().addingTimeInterval(-12 * 60),
+            isSessionOpen: false
         )
         peers = [harsh, studio]
-        selectedPeerID = studio.id
-        connectedPeerID = nil
-        phase = .idle
+        selectedPeerID = harsh.id
+        connectedIDs = [harsh.id]
+        phase = .ready
         if conversations[harsh.id] == nil {
             conversations[harsh.id] = [
                 ChatMessage(peerID: harsh.id, text: "You on AWDL?", isLocal: false, sentAt: Date().addingTimeInterval(-420)),

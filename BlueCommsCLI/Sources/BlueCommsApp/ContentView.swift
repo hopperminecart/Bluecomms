@@ -105,14 +105,26 @@ private struct PeerRow: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Palette.text)
                     .lineLimit(1)
-                Text(peer.shortName)
+                Text(peerSubtitle(peer))
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Palette.muted)
             }
             Spacer()
+            if peer.isSessionOpen {
+                Text("LIVE")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Palette.online)
+            }
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+    }
+
+    private func peerSubtitle(_ peer: NearbyPeer) -> String {
+        if peer.isOnline {
+            return peer.shortName
+        }
+        return "\(peer.shortName) · last seen \(peer.lastSeen.formatted(.relative(presentation: .named)))"
     }
 }
 
@@ -138,7 +150,7 @@ private struct ChatView: View {
                     Text(peer.displayName)
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(Palette.text)
-                    Text(store.isConnectedToSelection ? "Secure session" : (peer.isOnline ? "Nearby" : "Last seen recently"))
+                    Text(headerStatus(for: peer))
                         .font(.system(size: 12))
                         .foregroundStyle(store.isConnectedToSelection ? Palette.online : Palette.muted)
                 }
@@ -149,7 +161,7 @@ private struct ChatView: View {
                 } else {
                     Button("Connect") { store.connectToSelection() }
                         .buttonStyle(.borderedProminent)
-                        .disabled(store.phase == .connecting)
+                        .disabled(store.phase == .connecting || !peer.isOnline)
                 }
             } else {
                 Text("Select a nearby peer")
@@ -159,6 +171,16 @@ private struct ChatView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
+    }
+
+    private func headerStatus(for peer: NearbyPeer) -> String {
+        if store.isConnectedToSelection {
+            return peer.isOnline ? "Secure session" : "Secure session · peer radio went quiet"
+        }
+        if peer.isOnline {
+            return "Nearby"
+        }
+        return "Last seen \(peer.lastSeen.formatted(.relative(presentation: .named)))"
     }
 
     private var messageList: some View {
