@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.bluecomms.cli</string>
+	<key>CFBundleName</key>
+	<string>BlueComms</string>
+	<key>CFBundleExecutable</key>
+	<string>BlueCommsCLI</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>BlueComms discovers nearby peers over the local network and AWDL so you can chat without the internet.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_bluecomms._tcp</string>
+	</array>
+</dict>
+</plist>

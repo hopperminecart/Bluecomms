@@ -1,15 +1,34 @@
 // swift-tools-version: 6.1
-// The swift-tools-version declares the minimum version of Swift required to build this package.
 
+import Foundation
 import PackageDescription
+
+let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+let infoPlistPath = packageDirectory.appendingPathComponent("Sources/BlueCommsCLI/Info.plist").path
 
 let package = Package(
     name: "BlueCommsCLI",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS(.v14)],
     targets: [
-        // Targets are the basic building blocks of a package, defining a module or a test suite.
-        // Targets can depend on other targets in this package and products from dependencies.
+        .target(
+            name: "BlueCommsCore"
+        ),
         .executableTarget(
-            name: "BlueCommsCLI"),
+            name: "BlueCommsCLI",
+            dependencies: ["BlueCommsCore"],
+            exclude: ["Info.plist"],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", infoPlistPath,
+                ])
+            ]
+        ),
+        .executableTarget(
+            name: "BlueCommsSelfTest",
+            dependencies: ["BlueCommsCore"]
+        ),
     ]
 )
