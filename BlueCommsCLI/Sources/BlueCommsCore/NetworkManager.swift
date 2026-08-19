@@ -413,20 +413,19 @@ extension DiscoveredPeer {
 
     init?(result: NWBrowser.Result) {
         guard case .service(let name, _, _, _) = result.endpoint else { return nil }
-
-        var id = name
+        guard case .bonjour(let txt) = result.metadata,
+              let txtID = Self.txtString(txt, "id"),
+              UUID(uuidString: txtID) != nil else {
+            return nil
+        }
+        let id = txtID
         var displayName = name
-        if case .bonjour(let txt) = result.metadata {
-            if let txtID = Self.txtString(txt, "id"), !txtID.isEmpty {
-                id = txtID
-            }
-            if let txtName = Self.txtString(txt, "name"), !txtName.isEmpty {
-                displayName = txtName
-            }
-            if let proto = Self.txtString(txt, "proto"),
-               proto != String(HandshakePayload.protoVersion) {
-                return nil
-            }
+        if let txtName = Self.txtString(txt, "name"), !txtName.isEmpty {
+            displayName = txtName
+        }
+        if let proto = Self.txtString(txt, "proto"),
+           proto != String(HandshakePayload.protoVersion) {
+            return nil
         }
 
         self.id = id
