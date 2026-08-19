@@ -68,7 +68,7 @@ public final class NetworkManager: @unchecked Sendable {
         try self.init(store: IdentityStore(directory: IdentityStore.defaultDirectory))
     }
 
-    init(store: IdentityStore) throws {
+    public init(store: IdentityStore) throws {
         self.store = store
         self.identity = try store.loadOrCreate()
         let queue = DispatchQueue(label: "bluecomms.network")

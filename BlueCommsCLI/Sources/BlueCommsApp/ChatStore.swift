@@ -39,7 +39,7 @@ final class ChatStore: ObservableObject {
         try! ChatStore(demo: true)
     }
 
-    init(demo: Bool) throws {
+    init(demo: Bool, dataDirectory: URL? = nil) throws {
         isDemo = demo
         if demo {
             localName = "Rishi’s MacBook Air"
@@ -56,18 +56,22 @@ final class ChatStore: ObservableObject {
             return
         }
 
-        let manager = try NetworkManager()
+        let directory = dataDirectory ?? IdentityStore.defaultDirectory
+        let manager = try NetworkManager(store: IdentityStore(directory: directory))
         self.manager = manager
         localName = manager.deviceName
         shortID = manager.shortID
         fingerprint = manager.fingerprint
         statusLine = "Starting local radio…"
-        archive = try MessageArchive(directory: IdentityStore.defaultDirectory)
+        archive = try MessageArchive(directory: directory)
         if let saved = try? archive?.load() {
             conversations = saved.conversations
         }
         bind(manager)
-        manager.start()
+    }
+
+    func start() {
+        manager?.start()
     }
 
     func select(peerID: String) {
@@ -173,6 +177,86 @@ final class ChatStore: ObservableObject {
             statusLine = "File queued. Connect to send \(name)."
         }
         persist()
+    }
+
+    func playSendReceiveDemo() {
+        Task { @MainActor in
+            let harshID = selectedPeerID ?? peers.first?.id ?? "demo"
+            select(peerID: harshID)
+            let shotID = UUID()
+            append(ChatMessage(
+                peerID: harshID,
+                text: "screenshot.png",
+                isLocal: true,
+                kind: .file,
+                fileName: "screenshot.png",
+                fileSize: 2_400_000,
+                transferID: shotID,
+                progress: 0,
+                fileState: .transferring
+            ))
+            statusLine = "Sending screenshot.png…"
+            for step in 1...20 {
+                try? await Task.sleep(nanoseconds: 180_000_000)
+                if let index = conversations[harshID]?.firstIndex(where: { $0.transferID == shotID }) {
+                    conversations[harshID]?[index].progress = Double(step) / 20
+                    if step == 20 {
+                        conversations[harshID]?[index].fileState = .complete
+                    }
+                }
+            }
+            statusLine = "Screenshot delivered. Receiving clip.mp4…"
+            let clipID = UUID()
+            append(ChatMessage(
+                peerID: harshID,
+                text: "clip.mp4",
+                isLocal: false,
+                kind: .file,
+                fileName: "clip.mp4",
+                fileSize: 540 * 1024 * 1024,
+                transferID: clipID,
+                progress: 0,
+                fileState: .transferring
+            ))
+            for step in 1...20 {
+                try? await Task.sleep(nanoseconds: 180_000_000)
+                if let index = conversations[harshID]?.firstIndex(where: { $0.transferID == clipID }) {
+                    conversations[harshID]?[index].progress = Double(step) / 20
+                    if step == 20 {
+                        conversations[harshID]?[index].fileState = .complete
+                    }
+                }
+            }
+            statusLine = "Received clip.mp4"
+        }
+    }
+
+    func runSendReceiveTest(files: [URL]) {
+        Task { @MainActor in
+            statusLine = "Waiting for a nearby peer…"
+            for _ in 0..<40 {
+                if !peers.isEmpty { break }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            guard let peer = peers.first else {
+                statusLine = "No peer appeared for the send/receive test."
+                return
+            }
+            select(peerID: peer.id)
+            connectToSelection()
+            for _ in 0..<40 {
+                if isConnectedToSelection { break }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            guard isConnectedToSelection else {
+                statusLine = "Could not open a session for the send/receive test."
+                return
+            }
+            for file in files {
+                sendFile(url: file)
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
+        }
     }
 
     func sendScreenshot() {

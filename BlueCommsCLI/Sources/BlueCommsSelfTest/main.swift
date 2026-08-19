@@ -374,3 +374,61 @@ private func testFileStreamReassembles() throws {
     try expectEqual(digest, Data(recvHasher.finalize()))
     try expectEqual(digest, sendDigest)
 }
+
+private func testTwoPeersSendFile() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("bc-pair-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let sender = try NetworkManager(store: IdentityStore(directory: root.appendingPathComponent("sender")))
+    let receiver = try NetworkManager(store: IdentityStore(directory: root.appendingPathComponent("receiver")))
+
+    let payload = Data((0..<80_000).map { UInt8($0 % 251) })
+    let source = root.appendingPathComponent("screenshot.png")
+    try payload.write(to: source)
+
+    var discovered: [DiscoveredPeer] = []
+    var sessionReady = false
+    var receivedURL: URL?
+    var receivedName = ""
+    sender.onPeersUpdated = { discovered = $0 }
+    sender.onSecureSession = { _ in sessionReady = true }
+    receiver.onSecureSession = { _ in sessionReady = true }
+    receiver.onFileTransfer = { _, update in
+        if update.state == .complete {
+            receivedURL = update.localURL
+            receivedName = update.name
+        }
+    }
+
+    sender.start()
+    receiver.start()
+    defer {
+        sender.stop()
+        receiver.stop()
+    }
+
+    let deadline = Date().addingTimeInterval(12)
+    while discovered.isEmpty, Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    }
+    guard let peer = discovered.first else {
+        throw Failure(message: "peers did not discover each other on the local radio")
+    }
+    sender.connectToPeer(id: peer.id)
+    while !sessionReady, Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    }
+    guard sessionReady else {
+        throw Failure(message: "secure session did not come up")
+    }
+    sender.send(file: source, to: peer.id)
+
+    let receiveDeadline = Date().addingTimeInterval(8)
+    while receivedURL == nil, Date() < receiveDeadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    }
+    guard let got = receivedURL else {
+        throw Failure(message: "receiver never completed the file")
+    }
+    try expectEqual(receivedName, "screenshot.png")
+    try expectEqual(try Data(contentsOf: got), payload)
+}
