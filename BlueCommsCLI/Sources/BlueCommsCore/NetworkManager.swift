@@ -288,9 +288,6 @@ public final class NetworkManager: @unchecked Sendable {
         for id in gone {
             lastSeenAt[id] = Date()
         }
-        for id in next.keys {
-            lastSeenAt[id] = Date()
-        }
         discoveredByID = next
         let snapshot = orderedPeers()
         DispatchQueue.main.async { [onPeersUpdated] in
@@ -330,13 +327,14 @@ public final class NetworkManager: @unchecked Sendable {
         }
         peerConnection.onReadyForChat = { [weak self] peerID in
             guard let self else { return }
-            self.pending[connectionID] = nil
             let key = peerID.uuidString
+            guard let established = self.pending.removeValue(forKey: connectionID) else { return }
             if let old = self.sessions[key], old.id != connectionID {
                 old.onStateChange = nil
+                old.onReadyForChat = nil
                 old.cancel()
             }
-            self.sessions[key] = peerConnection
+            self.sessions[key] = established
             self.lastPeerID = key
             DispatchQueue.main.async { [weak self] in
                 self?.onConnectionEstablished?()
@@ -380,10 +378,10 @@ public final class NetworkManager: @unchecked Sendable {
     }
 
     private func disconnectLocked(peerID: String) {
-        if let conn = sessions[peerID] {
-            conn.cancel()
-        }
-        sessions[peerID] = nil
+        guard let conn = sessions.removeValue(forKey: peerID) else { return }
+        conn.onStateChange = nil
+        conn.onReadyForChat = nil
+        conn.cancel()
         if lastPeerID == peerID {
             lastPeerID = sessions.keys.first
         }
@@ -436,10 +434,12 @@ public final class NetworkManager: @unchecked Sendable {
         restartWork = nil
         restartScheduled = false
         for session in sessions.values {
+            session.onStateChange = nil
             session.cancel()
         }
-        for pending in pending.values {
-            pending.cancel()
+        for pendingConn in pending.values {
+            pendingConn.onStateChange = nil
+            pendingConn.cancel()
         }
         sessions.removeAll()
         pending.removeAll()
@@ -496,20 +496,19 @@ extension DiscoveredPeer {
 
     init?(result: NWBrowser.Result) {
         guard case .service(let name, _, _, _) = result.endpoint else { return nil }
-
-        var id = name
+        guard case .bonjour(let txt) = result.metadata,
+              let txtID = Self.txtString(txt, "id"),
+              UUID(uuidString: txtID) != nil else {
+            return nil
+        }
+        let id = txtID
         var displayName = name
-        if case .bonjour(let txt) = result.metadata {
-            if let txtID = Self.txtString(txt, "id"), !txtID.isEmpty {
-                id = txtID
-            }
-            if let txtName = Self.txtString(txt, "name"), !txtName.isEmpty {
-                displayName = txtName
-            }
-            if let proto = Self.txtString(txt, "proto"),
-               proto != String(HandshakePayload.protoVersion) {
-                return nil
-            }
+        if let txtName = Self.txtString(txt, "name"), !txtName.isEmpty {
+            displayName = txtName
+        }
+        if let proto = Self.txtString(txt, "proto"),
+           proto != String(HandshakePayload.protoVersion) {
+            return nil
         }
 
         self.id = id

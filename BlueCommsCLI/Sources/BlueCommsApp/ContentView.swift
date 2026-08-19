@@ -161,7 +161,7 @@ private struct ChatView: View {
                 } else {
                     Button("Connect") { store.connectToSelection() }
                         .buttonStyle(.borderedProminent)
-                        .disabled(store.phase == .connecting)
+                        .disabled(store.phase == .connecting || !peer.isOnline)
                 }
             } else {
                 Text("Select a nearby peer")

@@ -35,6 +35,10 @@ final class ChatStore: ObservableObject {
         return connectedIDs.contains(selectedPeerID)
     }
 
+    static var placeholder: ChatStore {
+        try! ChatStore(demo: true)
+    }
+
     init(demo: Bool) throws {
         isDemo = demo
         if demo {
@@ -72,6 +76,10 @@ final class ChatStore: ObservableObject {
 
     func connectToSelection() {
         guard let peer = selectedPeer else { return }
+        guard peer.isOnline else {
+            statusLine = "That peer is not nearby. The message will stay queued."
+            return
+        }
         if isDemo {
             connectedIDs.insert(peer.id)
             markSession(peerID: peer.id, open: true)
@@ -135,14 +143,16 @@ final class ChatStore: ObservableObject {
         }
         manager.onSecureSession = { [weak self] peerID in
             Task { @MainActor in
+                guard let self else { return }
                 let key = peerID.uuidString
-                self?.connectedIDs.insert(key)
-                self?.markSession(peerID: key, open: true)
-                self?.selectedPeerID = key
-                self?.phase = .ready
-                let name = self?.peers.first(where: { $0.id == key })?.displayName ?? "peer"
-                self?.statusLine = "Secure session with \(name)"
-                self?.flushOutbound(for: key)
+                self.ensurePeer(id: key)
+                self.connectedIDs.insert(key)
+                self.markSession(peerID: key, open: true)
+                self.selectedPeerID = key
+                self.phase = .ready
+                let name = self.peers.first(where: { $0.id == key })?.displayName ?? "peer"
+                self.statusLine = "Secure session with \(name)"
+                self.flushOutbound(for: key)
             }
         }
         manager.onPeerDisconnected = { [weak self] peerID in
@@ -206,7 +216,6 @@ final class ChatStore: ObservableObject {
         for peer in discovered {
             if let index = peers.firstIndex(where: { $0.id == peer.id }) {
                 peers[index].isOnline = true
-                peers[index].lastSeen = now
             } else {
                 peers.append(
                     NearbyPeer(
@@ -234,6 +243,23 @@ final class ChatStore: ObservableObject {
     private func markSession(peerID: String, open: Bool) {
         if let index = peers.firstIndex(where: { $0.id == peerID }) {
             peers[index].isSessionOpen = open
+        }
+    }
+
+    private func ensurePeer(id: String) {
+        guard peers.contains(where: { $0.id == id }) else {
+            let short = String(id.replacingOccurrences(of: "-", with: "").prefix(8))
+            peers.append(
+                NearbyPeer(
+                    id: id,
+                    displayName: "Peer \(short)",
+                    shortName: short,
+                    isOnline: true,
+                    lastSeen: Date(),
+                    isSessionOpen: true
+                )
+            )
+            return
         }
     }
 
