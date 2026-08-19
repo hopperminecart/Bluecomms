@@ -6,7 +6,7 @@ final class PeerConnection: @unchecked Sendable {
     let connection: NWConnection
 
     var onStateChange: ((NWConnection.State) -> Void)?
-    var onReadyForChat: (() -> Void)?
+    var onReadyForChat: ((UUID) -> Void)?
     var onMessageReceived: ((String) -> Void)?
     var onHandshake: ((HandshakePayload) throws -> TOFUResult)?
     var onLog: ((String) -> Void)?
@@ -166,7 +166,7 @@ final class PeerConnection: @unchecked Sendable {
         }
 
         flushOutboundQueue()
-        onReadyForChat?()
+        onReadyForChat?(payload.peerID)
     }
 
     private func handleCiphertext(_ body: Data) throws {
