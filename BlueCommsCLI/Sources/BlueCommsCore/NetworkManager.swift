@@ -28,9 +28,12 @@ public final class NetworkManager: @unchecked Sendable {
 
     public var onPeersUpdated: (([DiscoveredPeer]) -> Void)?
     public var onConnectionEstablished: (() -> Void)?
+    public var onSecureSession: ((UUID) -> Void)?
+    public var onDisconnected: (() -> Void)?
     public var onMessageReceived: ((String) -> Void)?
     public var onLog: ((String) -> Void)?
 
+    public var deviceID: UUID { identity.id }
     public var deviceName: String { identity.displayName }
     public var shortID: String { identity.shortID }
     public var fingerprint: String { identity.fingerprint }
@@ -72,6 +75,19 @@ public final class NetworkManager: @unchecked Sendable {
             self.activeConnection?.cancel()
             self.activeConnection = nil
             self.emitLog("[CONNECTION] Disconnected.")
+            DispatchQueue.main.async { [weak self] in
+                self?.onDisconnected?()
+            }
+        }
+    }
+
+    public func connectToPeer(id: String) {
+        onQueueAsync {
+            guard let peer = self.discoveredByID[id] else {
+                self.emitLog("Unknown peer.")
+                return
+            }
+            self.connect(to: peer)
         }
     }
 
@@ -272,9 +288,10 @@ public final class NetworkManager: @unchecked Sendable {
             }
             return try self.store.verifyOrRemember(peerID: payload.peerID, publicKey: payload.publicKey)
         }
-        peerConnection.onReadyForChat = { [weak self] in
+        peerConnection.onReadyForChat = { [weak self] peerID in
             DispatchQueue.main.async { [weak self] in
                 self?.onConnectionEstablished?()
+                self?.onSecureSession?(peerID)
             }
         }
         peerConnection.onMessageReceived = { [weak self] message in
@@ -291,11 +308,17 @@ public final class NetworkManager: @unchecked Sendable {
                 self.emitLog("[CONNECTION] Failed: \(error)")
                 if self.activeConnection?.id == connectionID {
                     self.activeConnection = nil
+                    DispatchQueue.main.async { [weak self] in
+                        self?.onDisconnected?()
+                    }
                 }
             case .cancelled:
                 self.emitLog("[CONNECTION] Cancelled")
                 if self.activeConnection?.id == connectionID {
                     self.activeConnection = nil
+                    DispatchQueue.main.async { [weak self] in
+                        self?.onDisconnected?()
+                    }
                 }
             case .preparing:
                 self.emitLog("[CONNECTION] Preparing...")

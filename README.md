@@ -8,7 +8,9 @@ Needs macOS 14+ and Swift 6.1.
 
 ```bash
 cd BlueCommsCLI
-swift run
+swift run BlueCommsApp          # Mac app
+swift run BlueCommsApp --demo   # UI with simulated peers (no second Mac)
+swift run BlueCommsCLI          # original terminal client
 ```
 
 Run it on two Macs on the same LAN, or on two Macs with Wi-Fi on and no access point (AWDL).

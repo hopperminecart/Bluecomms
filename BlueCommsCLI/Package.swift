@@ -5,6 +5,7 @@ import PackageDescription
 
 let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let infoPlistPath = packageDirectory.appendingPathComponent("Sources/BlueCommsCLI/Info.plist").path
+let appInfoPlistPath = packageDirectory.appendingPathComponent("Sources/BlueCommsApp/Info.plist").path
 
 let package = Package(
     name: "BlueCommsCLI",
@@ -23,6 +24,19 @@ let package = Package(
                     "-Xlinker", "__TEXT",
                     "-Xlinker", "__info_plist",
                     "-Xlinker", infoPlistPath,
+                ])
+            ]
+        ),
+        .executableTarget(
+            name: "BlueCommsApp",
+            dependencies: ["BlueCommsCore"],
+            exclude: ["Info.plist"],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", appInfoPlistPath,
                 ])
             ]
         ),
