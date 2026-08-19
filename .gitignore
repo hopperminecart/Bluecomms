@@ -4,3 +4,6 @@
 xcuserdata/
 DerivedData/
 .swiftpm/
+*_bin
+*.o
+*.dylib
