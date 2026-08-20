@@ -1,40 +1,72 @@
+//
+//  ChatStore.swift
+//
+//  Why this file exists:
+//    The Mac window cannot talk to Network.framework itself. This object is the
+//    UI's brain: SwiftUI binds to @Published fields, and we translate button
+//    taps into NetworkManager calls.
+//
+//  What it does:
+//    • Holds the sidebar (peers), the selected thread, the draft box, and status.
+//    • Starts Bonjour/AWDL once (see start()).
+//    • Loads/saves encrypted history so a quit does not wipe chat.
+//    • Queues text and files when that Mac is not connected, then flushes them
+//      after the handshake.
+//    • Hops every network callback onto the main thread so SwiftUI can redraw.
+//
+//  This is the glue from PRs #2 (window), #3 (history + queue), #4 (many peers),
+//  #5 (files), and #6 (do not start the radio twice).
+//
+
 import BlueCommsCore
 import Combine
 import Foundation
 
-/// UI state on the main thread. Network work stays in `NetworkManager`.
 @MainActor
 final class ChatStore: ObservableObject {
+    /// Sidebar list. Includes people who walked away (isOnline == false).
     @Published var peers: [NearbyPeer] = []
+    /// Threads keyed by peer UUID string. Reloaded from disk in init.
     @Published var conversations: [String: [ChatMessage]] = [:]
+    /// Which row is selected. nil = no thread on the right.
     @Published var selectedPeerID: String?
+    /// The composer text field. Cleared when we send.
     @Published var draft: String = ""
+    /// idle / connecting / ready — used to disable Connect while TCP is coming up.
     @Published var phase: ConnectionPhase = .idle
+    /// One-line footer in the sidebar (logs, errors, "Secure session with …").
     @Published var statusLine: String
 
     let localName: String
     let shortID: String
     let fingerprint: String
 
+    /// The radio. nil only if launch failed (disk / identity error).
     private var manager: NetworkManager?
+    /// Peer ids that currently have a finished handshake.
     private var connectedIDs: Set<String> = []
+    /// Encrypted history in ~/.bluecomms. nil if launch failed.
     private var archive: MessageArchive?
+    /// start() can run from onAppear more than once. The radio must start once.
     private var didStart = false
 
     var selectedPeer: NearbyPeer? { peers.first { $0.id == selectedPeerID } }
+
     var selectedMessages: [ChatMessage] {
         guard let selectedPeerID else { return [] }
         return conversations[selectedPeerID] ?? []
     }
+
     var isConnectedToSelection: Bool {
         selectedPeerID.map { connectedIDs.contains($0) } ?? false
     }
 
-    /// Used only when identity/archive setup fails at launch.
+    /// Empty store so SwiftUI still has an object if identity/archive cannot load.
     static func failed(_ error: Error) -> ChatStore {
         ChatStore(error: error)
     }
 
+    /// Loads identity + history from disk. Does not start the radio — see `start()`.
     init() throws {
         let directory = IdentityStore.defaultDirectory
         let manager = try NetworkManager(store: IdentityStore(directory: directory))
@@ -48,6 +80,7 @@ final class ChatStore: ObservableObject {
         bind(manager)
     }
 
+    /// Used only when init() throws. Window shows the error string instead of chat.
     private init(error: Error) {
         localName = "—"
         shortID = ""
@@ -55,7 +88,8 @@ final class ChatStore: ObservableObject {
         statusLine = String(describing: error)
     }
 
-    /// Start Bonjour + AWDL once. Split-view / onAppear can fire more than once.
+    /// Start Bonjour + AWDL once. Split-view / onAppear can fire more than once;
+    /// a second start() used to cancel the live stacks and freeze the sidebar.
     func start() {
         guard !didStart else { return }
         didStart = true
@@ -66,6 +100,7 @@ final class ChatStore: ObservableObject {
 
     func select(peerID: String) { selectedPeerID = peerID }
 
+    /// Outbound TCP to the selected Mac. They must still be in the Bonjour list.
     func connectToSelection() {
         guard let peer = selectedPeer else { return }
         guard peer.isOnline else {
@@ -85,6 +120,7 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    /// Send typed text, or queue it if that session is down.
     func sendDraft() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let peerID = selectedPeerID else { return }
@@ -99,6 +135,8 @@ final class ChatStore: ObservableObject {
         persist()
     }
 
+    /// Stream a photo/video/file. Same queue rules as text.
+    /// `startAccessingSecurityScopedResource` is required for files from the picker.
     func sendFile(url: URL) {
         guard let peerID = selectedPeerID else { return }
         let accessed = url.startAccessingSecurityScopedResource()
@@ -123,6 +161,7 @@ final class ChatStore: ObservableObject {
         persist()
     }
 
+    /// Capture the main display to /tmp, then send it as a normal file.
     func sendScreenshot() {
         guard let url = ScreenGrab.savePNG() else {
             statusLine = "Could not capture the screen. Grant Screen Recording if asked."
@@ -131,6 +170,7 @@ final class ChatStore: ObservableObject {
         sendFile(url: url)
     }
 
+    /// Wire NetworkManager callbacks. They arrive off the main thread.
     private func bind(_ manager: NetworkManager) {
         manager.onPeersUpdated = { [weak self] peers in
             Task { @MainActor in self?.mergePresence(peers) }
@@ -146,6 +186,7 @@ final class ChatStore: ObservableObject {
                 self.phase = .ready
                 let name = self.peers.first { $0.id == key }?.displayName ?? "peer"
                 self.statusLine = "Secure session with \(name)"
+                // Anything typed while they were gone goes out now.
                 self.flushOutbound(for: key)
             }
         }
@@ -169,6 +210,7 @@ final class ChatStore: ObservableObject {
         }
         manager.onLog = { [weak self] line in
             Task { @MainActor in
+                // Once a session is up, keep the footer on "Secure session…"
                 if self?.phase != .ready { self?.statusLine = line }
             }
         }
@@ -178,6 +220,7 @@ final class ChatStore: ObservableObject {
         conversations[message.peerID, default: []].append(message)
     }
 
+    /// Update an existing file card, or add an incoming one we have not seen yet.
     private func applyFileUpdate(peerID: UUID, update: FileTransferUpdate) {
         let key = peerID.uuidString
         if let index = conversations[key]?.firstIndex(where: { $0.transferID == update.transferID }) {
@@ -203,10 +246,12 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    /// Write the thread list to disk. Progress ticks are not written (too frequent).
     private func persist() {
         try? archive?.save(ConversationSnapshot(conversations: conversations))
     }
 
+    /// After handshake, push anything we stored while they were gone.
     private func flushOutbound(for peerID: String) {
         guard var thread = conversations[peerID] else { return }
         var sent = false
@@ -225,6 +270,8 @@ final class ChatStore: ObservableObject {
         persist()
     }
 
+    /// Bonjour list in, sidebar list out. Only publishes when something actually changed
+    /// so the sidebar does not flicker on every browse tick.
     private func mergePresence(_ discovered: [DiscoveredPeer]) {
         let online = Set(discovered.map(\.id))
         let now = Date()
@@ -254,7 +301,8 @@ final class ChatStore: ObservableObject {
         if let i = peers.firstIndex(where: { $0.id == peerID }) { peers[i].isSessionOpen = open }
     }
 
-    /// Inbound connect can finish before Bonjour lists the peer.
+    /// Inbound connect can finish before Bonjour lists the peer. Invent a row so
+    /// the chat pane has someone to show.
     private func ensurePeer(id: String) {
         guard !peers.contains(where: { $0.id == id }) else { return }
         let short = String(id.replacingOccurrences(of: "-", with: "").prefix(8))

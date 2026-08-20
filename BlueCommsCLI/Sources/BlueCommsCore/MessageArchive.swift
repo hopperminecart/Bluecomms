@@ -1,7 +1,18 @@
+//
+//  MessageArchive.swift
+//
+//  Why this file exists:
+//    Quitting used to wipe the thread. This writes conversations.bin next
+//    to the identity files, encrypted with AES-GCM (PR #3).
+//
+//  File bytes stay on disk under ~/Downloads/BlueComms — we only store
+//  names/paths/progress here. Key is archive.key (256-bit, 0600).
+//
+
 import CryptoKit
 import Foundation
 
-/// Encrypted chat history next to the identity files.
+/// Encrypted chat history. Same directory as IdentityStore (~/.bluecomms).
 public struct MessageArchive: Sendable {
     public let directory: URL
     private let key: SymmetricKey
@@ -13,6 +24,7 @@ public struct MessageArchive: Sendable {
         self.key = try Self.loadOrCreateKey(in: directory)
     }
 
+    /// Empty snapshot if the file is missing (first launch).
     public func load() throws -> ConversationSnapshot {
         let url = archiveURL
         guard FileManager.default.fileExists(atPath: url.path) else {

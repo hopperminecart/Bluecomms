@@ -1,3 +1,21 @@
+//
+//  IdentityStore.swift
+//
+//  Why this file exists:
+//    Every Mac needs a stable id and an X25519 key that survive restarts.
+//    Also remembers other people's public keys (TOFU) so a changed key is
+//    treated as a different device, not silently accepted.
+//
+//  On disk (~/.bluecomms, mode 0700 / files 0600):
+//    device-id          — UUID
+//    identity           — raw X25519 private key
+//    known-peers.json   — peer UUID → base64 public key
+//
+//  Computer name comes from SCDynamicStore. Host.current() can hang the
+//  main thread for seconds (blank window + CLI that never printed) — PR #6.
+//  Bonjour names are 63 bytes max, so we append a short id and truncate.
+//
+
 import CryptoKit
 import Foundation
 import SystemConfiguration
@@ -26,6 +44,7 @@ public struct DeviceIdentity: Sendable {
     }
     public var fingerprint: String { keyFingerprint(publicKeyData) }
 
+    /// Bonjour instance name. 63-byte cap is a protocol limit, not ours.
     public var bonjourName: String {
         let suffix = " · \(shortID)"
         let budget = max(0, 63 - suffix.utf8.count)
@@ -60,6 +79,7 @@ public struct IdentityStore: Sendable {
             .appendingPathComponent(".bluecomms", isDirectory: true)
     }
 
+    /// Read existing files, or create them on first launch.
     public func loadOrCreate() throws -> DeviceIdentity {
         try ensureDirectory()
         let id = try loadOrCreateDeviceID()
@@ -72,6 +92,7 @@ public struct IdentityStore: Sendable {
         )
     }
 
+    /// Trust on first use. Same id + different key → tofuMismatch (refuse).
     public func verifyOrRemember(peerID: UUID, publicKey: Data) throws -> TOFUResult {
         if let known = try knownPublicKey(for: peerID) {
             if known == publicKey { return .matched }
@@ -133,6 +154,7 @@ public struct IdentityStore: Sendable {
         try writeProtected(data, to: knownPeersURL)
     }
 
+    /// Atomic write + 0600 so other accounts on this Mac cannot read keys.
     private func writeProtected(_ data: Data, to url: URL) throws {
         try data.write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)

@@ -1,7 +1,22 @@
+//
+//  main.swift  (BlueCommsCLI)
+//
+//  Why this file exists:
+//    Terminal client. Same NetworkManager as the Mac app. Exists so you can
+//    chat without a window. Files and screenshots are app-only.
+//
+//  What it does:
+//    Loads identity, starts Bonjour/AWDL, then reads stdin on a background
+//    queue. Network callbacks stay on the manager queue. The main thread
+//    just runs RunLoop so GCD / Network.framework can fire.
+//
+//    readLine() must NOT run on the main thread — it would block Bonjour.
+//    An empty readLine() is EOF (Ctrl-D / pipe end), not "keep spinning".
+//
+
 import Foundation
 import BlueCommsCore
 
-// Terminal client. Same radio as the Mac app. Type `help`.
 let manager: NetworkManager
 do {
     manager = try NetworkManager()
@@ -47,11 +62,13 @@ manager.onMessageReceived = { message in
 
 manager.start()
 
+// stdin on its own queue so a blocked readLine does not stall the radio.
 let inputQueue = DispatchQueue(label: "bluecomms.input")
 inputQueue.async {
     printPrompt()
     while true {
         guard let input = readLine() else {
+            // nil = EOF. Looping here used to peg a CPU core.
             manager.stop()
             exit(0)
         }
@@ -64,8 +81,10 @@ inputQueue.async {
     }
 }
 
+// Keep the process alive. Network.framework needs a run loop / GCD.
 RunLoop.main.run()
 
+/// Built-in verbs first. Anything else is a chat line (only if connected).
 private func handleCommand(_ raw: String, manager: NetworkManager) {
     let lowered = raw.lowercased()
     if lowered == "quit" || lowered == "exit" {
@@ -87,6 +106,7 @@ private func handleCommand(_ raw: String, manager: NetworkManager) {
         printPrompt()
         return
     }
+    // `connect 0` or `connect Rishi's Mac`. Anything else is a chat line.
     if lowered == "connect" || lowered.hasPrefix("connect ") {
         let rest = raw.dropFirst("connect".count).trimmingCharacters(in: .whitespacesAndNewlines)
         if rest.isEmpty {

@@ -1,8 +1,23 @@
+//
+//  PeerConnection.swift
+//
+//  Why this file exists:
+//    One encrypted TCP session. NetworkManager owns many of these.
+//    Handshake, chat frames, and file chunks all go through here.
+//
+//  Critical: NWConnection.send defaults isComplete to true. That FINs the
+//  stream after the first message — the other side then only ever got one
+//  line (PR #1). We always pass isComplete: false until we hang up.
+//
+//  Receive is a single loop. Starting it twice (ready + first byte) used
+//  to interleave frames. Handshake has a 10s timeout so a silent peer
+//  does not sit in "Connecting…" forever.
+//
+
 import CryptoKit
 import Foundation
 import Network
 
-/// One TCP session: handshake, framed chat, chunked files.
 /// `isComplete` on send must stay false or the first chat line FINs the stream.
 final class PeerConnection: @unchecked Sendable {
     let id: UUID
@@ -45,6 +60,7 @@ final class PeerConnection: @unchecked Sendable {
         self.crypto = CryptoSession(localPrivateKey: identity.privateKey)
     }
 
+    /// Start TCP. Handshake goes out when state becomes .ready.
     func start() {
         connection.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
@@ -65,6 +81,7 @@ final class PeerConnection: @unchecked Sendable {
         connection.start(queue: queue)
     }
 
+    /// Chat line. Queued if handshake is still in flight (cap 32).
     func send(message: String) {
         guard !closed else { return }
         if isReadyForMessages {
@@ -109,6 +126,7 @@ final class PeerConnection: @unchecked Sendable {
         handshakeSent = true
     }
 
+    /// One receive at a time. Always re-arm unless the connection is done.
     private func receiveLoop() {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 262_144) { [weak self] content, _, isComplete, error in
             guard let self, !self.closed else { return }
@@ -239,6 +257,7 @@ final class PeerConnection: @unchecked Sendable {
         }
     }
 
+    /// Length-prefix + send. isComplete: false keeps TCP open for the next frame.
     private func sendFrame(type: WireType, body: Data) {
         var payload = Data([type.rawValue])
         payload.append(body)
@@ -264,6 +283,7 @@ final class PeerConnection: @unchecked Sendable {
         queue.asyncAfter(deadline: .now() + Self.handshakeTimeout, execute: work)
     }
 
+    /// Sender-side file. Reads 256 KB at a time; hasher runs as we go.
     private struct OutgoingTransfer {
         let id: UUID
         let name: String
@@ -277,6 +297,7 @@ final class PeerConnection: @unchecked Sendable {
         var accepted: Bool
     }
 
+    /// Receiver-side file. Writes a .part file, then renames on matching SHA-256.
     private struct IncomingTransfer {
         let id: UUID
         let name: String
@@ -331,7 +352,8 @@ final class PeerConnection: @unchecked Sendable {
         case .accept(let id, let resumeFrom):
             guard var transfer = outgoing[id] else { return }
             transfer.accepted = true
-            // Always send from byte 0. Resume would skip bytes the hasher still needs.
+            // Always send from byte 0. Resume would skip bytes the hasher still needs
+            // and the checksum at the end would fail.
             if resumeFrom != 0 {
                 onLog?("[FILE] Peer asked to resume; restarting from the beginning.")
             }
@@ -425,6 +447,7 @@ final class PeerConnection: @unchecked Sendable {
         }
     }
 
+    /// Keep up to `windowChunks` chunks in flight. Called again on every ack.
     private func fillWindow(_ id: UUID) {
         guard !closed, var transfer = outgoing[id], transfer.accepted else { return }
         while transfer.inflight < FileMessage.windowChunks, transfer.offset < transfer.size {

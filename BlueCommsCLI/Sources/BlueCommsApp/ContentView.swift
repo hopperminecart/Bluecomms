@@ -1,9 +1,24 @@
+//
+//  ContentView.swift
+//
+//  Why this file exists:
+//    Draws the Mac window. No networking here — it only reads/writes ChatStore.
+//
+//  What it does:
+//    Left column = you + nearby Macs. Right column = thread + composer.
+//    Attach / Screenshot / drag-and-drop all call ChatStore.sendFile.
+//
+//  Layout is an HStack on purpose. NavigationSplitView opened as a blank
+//  sidebar on this macOS and froze when the column toggle re-started the radio
+//  (PR #6). Do not switch it back without testing on a real Mac.
+//
+
 import AppKit
 import BlueCommsCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Sidebar + thread. HStack on purpose — NavigationSplitView opened blank on this macOS.
+/// Root of the window: sidebar | chat. Lives inside BlueCommsMacApp.
 struct ContentView: View {
     @EnvironmentObject private var store: ChatStore
 
@@ -22,6 +37,7 @@ struct ContentView: View {
     }
 }
 
+/// You, the Nearby list, and the status footer.
 private struct SidebarView: View {
     @EnvironmentObject private var store: ChatStore
 
@@ -90,6 +106,7 @@ private struct SidebarView: View {
     }
 }
 
+/// One Mac in the sidebar. Green dot = Bonjour still sees them. LIVE = TCP is up.
 private struct PeerRow: View {
     let peer: NearbyPeer
     let isSelected: Bool
@@ -127,6 +144,7 @@ private struct PeerRow: View {
     }
 }
 
+/// Header + bubbles + composer. Files can be dropped onto this whole pane.
 private struct ChatView: View {
     @EnvironmentObject private var store: ChatStore
 
@@ -235,6 +253,7 @@ private struct ChatView: View {
         }
     }
 
+    /// Finder / Photos drop. Must hop to main because loadObject is off-thread.
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         var accepted = false
         for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
@@ -256,6 +275,7 @@ private struct ChatView: View {
     }
 }
 
+/// One chat row: a text bubble or a file card with a progress bar.
 private struct MessageBubble: View {
     let message: ChatMessage
 
@@ -367,6 +387,7 @@ private struct MessageBubble: View {
     }
 }
 
+/// Dark palette used only by this window. Not a system theme.
 private enum Palette {
     static let bg = Color(red: 0.07, green: 0.08, blue: 0.10)
     static let sidebar = Color(red: 0.09, green: 0.10, blue: 0.13)

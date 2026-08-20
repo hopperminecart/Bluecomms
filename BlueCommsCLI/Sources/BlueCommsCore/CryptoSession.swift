@@ -1,7 +1,22 @@
+//
+//  CryptoSession.swift
+//
+//  Why this file exists:
+//    After TCP is up we still need encryption. Anyone on the LAN (or AWDL)
+//    could otherwise read chat. This file is the handshake + AES-GCM.
+//
+//  What it does:
+//    Swap X25519 public keys (plain, type 0x01), derive two direction keys
+//    with HKDF, then seal/open chat (0x02) and file frames (0x03).
+//    First-time peers are trusted on first use (TOFU) — see IdentityStore.
+//    Direction keys come from comparing public keys so both sides agree
+//    who is "low→high" without a third message.
+//
+
 import CryptoKit
 import Foundation
 
-/// On-wire type byte. Handshake is plaintext; chat and files are AES-GCM after key exchange.
+/// First byte of every framed payload. Handshake is the only plaintext type.
 public enum WireType: UInt8, Sendable {
     case handshake = 0x01
     case ciphertext = 0x02
@@ -17,6 +32,7 @@ public enum CryptoError: Error, Equatable, Sendable {
     case tofuMismatch
 }
 
+/// proto (1) + peer UUID (16) + X25519 public key (32). Fixed size on purpose.
 public struct HandshakePayload: Equatable, Sendable {
     public static let protoVersion: UInt8 = 1
     public static let wireSize = 1 + 16 + 32
@@ -61,6 +77,7 @@ public struct CryptoSession: Sendable {
         self.localPrivateKey = localPrivateKey
     }
 
+    /// Derive send/receive keys from the peer's public key. Call once per session.
     public mutating func establish(peerPublicKey: Data) throws {
         let peer: Curve25519.KeyAgreement.PublicKey
         do {
@@ -94,6 +111,7 @@ public struct CryptoSession: Sendable {
         sendCounter = 0
     }
 
+    /// Encrypt. Nonce is a counter so we never reuse (nonce, key).
     public mutating func seal(_ plaintext: Data) throws -> Data {
         guard let sendKey else { throw CryptoError.notEstablished }
         let nonceData = nonceBytes(sendCounter)
@@ -103,6 +121,7 @@ public struct CryptoSession: Sendable {
         return nonceData + sealed.ciphertext + sealed.tag
     }
 
+    /// Decrypt a blob from the other side. Layout: 12-byte nonce + ciphertext + 16-byte tag.
     public func open(_ blob: Data) throws -> Data {
         guard let receiveKey else { throw CryptoError.notEstablished }
         guard blob.count >= 12 + 16 else { throw CryptoError.malformedCiphertext }
@@ -153,6 +172,7 @@ func uuidFromBytes(_ data: Data) -> UUID? {
     ))
 }
 
+/// Short hex people can read aloud: "A1B2-C3D4-E5F6" from SHA-256(public key).
 public func keyFingerprint(_ publicKey: Data) -> String {
     let digest = SHA256.hash(data: publicKey)
     let hex = digest.prefix(6).map { String(format: "%02X", $0) }.joined()

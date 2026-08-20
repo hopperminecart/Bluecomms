@@ -1,4 +1,19 @@
 // swift-tools-version: 6.1
+//
+//  Package.swift
+//
+//  Why this file exists:
+//    SwiftPM manifest. One package, four targets:
+//      BlueCommsCore     — framing, crypto, Bonjour/AWDL, files (the radio)
+//      BlueCommsCLI      — terminal
+//      BlueCommsApp      — Mac window
+//      BlueCommsSelfTest — XCTest is missing from Command Line Tools, so a
+//                          normal executable that prints ok/FAIL
+//
+//  Info.plist is linked into the two user binaries (`-sectcreate __TEXT
+//  __info_plist`) so macOS Local Network / Bonjour prompts work. Without
+//  those keys, browse stays empty even with Wi-Fi on.
+//
 
 import Foundation
 import PackageDescription
