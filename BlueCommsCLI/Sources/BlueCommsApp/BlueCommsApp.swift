@@ -61,9 +61,13 @@ struct BlueCommsMacApp: App {
                     }
                     .padding(32)
                     .frame(minWidth: 520, minHeight: 240)
+                    .onAppear { Self.bringAppForward() }
                 } else if pairTest {
                     pairBody
-                        .onAppear { harness.boot(files: sendFiles) }
+                        .onAppear {
+                            Self.bringAppForward()
+                            harness.boot(files: sendFiles)
+                        }
                         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                             harness.stop()
                         }
@@ -72,6 +76,7 @@ struct BlueCommsMacApp: App {
                         .environmentObject(store)
                         .frame(minWidth: 820, minHeight: 520)
                         .onAppear {
+                            Self.bringAppForward()
                             store.start()
                             if demoTransfer {
                                 store.playSendReceiveDemo()
@@ -102,6 +107,15 @@ struct BlueCommsMacApp: App {
             Text("Starting sender and receiver…")
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 1100, minHeight: 560)
+        }
+    }
+
+    /// `swift run` is not a bundled .app — without this the window can open blank/behind everything.
+    private static func bringAppForward() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        for window in NSApp.windows {
+            window.makeKeyAndOrderFront(nil)
         }
     }
 }
