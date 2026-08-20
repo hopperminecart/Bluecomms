@@ -1,7 +1,24 @@
+//
+//  FileTransfer.swift
+//
+//  Why this file exists:
+//    Chat frames are tiny. Photos/video/files need a streaming protocol so
+//    we never load a 500 MB–GB file into RAM (PR #5).
+//
+//  Wire (each FileMessage is then AES-GCM sealed as WireType.file):
+//    offer → accept → 256 KB chunks → ack → complete(SHA-256)
+//
+//  Window is 8 chunks in flight. Cap 8 GB. Inbox: ~/Downloads/BlueComms.
+//  Same AWDL radio as chat — stay nearby until the bar hits 100%.
+//
+//  UInt16 name length is encoded as [high, low] of the original value.
+//  Do not write `value.bigEndian` then shift — that swapped bytes and
+//  made every offer fail to decode.
+//
+
 import CryptoKit
 import Foundation
 
-/// Chunked file transfer (256 KB pieces, 8 GB cap). Do not load the whole file into RAM.
 public enum FileTransferState: String, Codable, Sendable {
     case queued
     case transferring
@@ -10,6 +27,7 @@ public enum FileTransferState: String, Codable, Sendable {
     case cancelled
 }
 
+/// Progress event ChatStore turns into a file card. Public so the UI can construct tests.
 public struct FileTransferUpdate: Sendable {
     public let transferID: UUID
     public let name: String
@@ -56,6 +74,7 @@ public enum FileOpcode: UInt8 {
     case cancel = 7
 }
 
+/// One control or data message inside a file frame.
 public enum FileMessage: Equatable {
     public static let chunkSize = 256 * 1024
     public static let windowChunks = 8
@@ -154,6 +173,7 @@ public enum FileTransferError: Error, Equatable {
     case notConnected
 }
 
+/// Strip path separators so a peer cannot write outside ~/Downloads/BlueComms.
 public func sanitizeFileName(_ raw: String) -> String {
     let trimmed = raw.replacingOccurrences(of: "/", with: "-")
         .replacingOccurrences(of: ":", with: "-")
@@ -166,6 +186,7 @@ func incomingInboxURL() -> URL {
         .appendingPathComponent("Downloads/BlueComms", isDirectory: true)
 }
 
+/// If "photo.png" exists, write "photo 2.png" instead of overwriting.
 func uniqueDestination(directory: URL, name: String) -> URL {
     let base = (name as NSString).deletingPathExtension
     let ext = (name as NSString).pathExtension
@@ -179,6 +200,7 @@ func uniqueDestination(directory: URL, name: String) -> URL {
     return url
 }
 
+/// Big-endian 16-bit. Must use the original value, not value.bigEndian.
 func uInt16Bytes(_ value: UInt16) -> [UInt8] {
     [UInt8(value >> 8), UInt8(truncatingIfNeeded: value)]
 }

@@ -1,3 +1,15 @@
+//
+//  main.swift  (BlueCommsSelfTest)
+//
+//  Why this file exists:
+//    Command Line Tools do not ship XCTest / Swift Testing, so we cannot
+//    use `swift test`. This executable runs the same checks and prints
+//    ok / FAIL. Cover framing, crypto, identity, archive, file messages.
+//
+//  These are in-process unit checks. They do not prove two Macs can see
+//  each other over AWDL — that still needs two machines and working AirDrop.
+//
+
 import CryptoKit
 import Foundation
 import BlueCommsCore

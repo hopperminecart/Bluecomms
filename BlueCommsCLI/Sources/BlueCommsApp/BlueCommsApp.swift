@@ -1,10 +1,29 @@
+//
+//  BlueCommsApp.swift
+//
+//  Why this file exists:
+//    `swift run BlueCommsApp` needs a @main App. This is that entry point.
+//    Without it there is only the terminal client.
+//
+//  What it does:
+//    • Builds ChatStore (identity + history) before the window appears.
+//    • Shows ContentView, or a plain error if disk/identity failed.
+//    • Starts the radio after the window exists so launch stays fast.
+//    • Forces the process into the Dock. `swift run` is not a real .app
+//      bundle, so without this the window can open blank or behind other apps.
+//
+//  PR #2 added the window. PR #6 is why start() is in onAppear (not init)
+//  and why bringForward() exists.
+//
+
 import AppKit
 import SwiftUI
 
-/// Mac window. `swift run` is not a real .app, so we force the process to the foreground.
 @main
 struct BlueCommsMacApp: App {
+    /// Shared by every view via .environmentObject.
     @StateObject private var store: ChatStore
+    /// Non-nil means we could not load ~/.bluecomms. Window shows this text.
     private let launchError: String?
 
     init() {
@@ -13,7 +32,7 @@ struct BlueCommsMacApp: App {
             _store = StateObject(wrappedValue: created)
             launchError = nil
         } catch {
-            // ChatStore requires a real store; show the error instead of a fake UI.
+            // Identity/archive can fail (disk permissions). Show the error; do not fake a UI.
             _store = StateObject(wrappedValue: ChatStore.failed(error))
             launchError = String(describing: error)
         }
@@ -31,6 +50,7 @@ struct BlueCommsMacApp: App {
                     .frame(minWidth: 820, minHeight: 520)
                     .onAppear {
                         bringForward()
+                        // After the window exists so launch stays fast. start() is once-only.
                         store.start()
                     }
                     .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
@@ -41,6 +61,7 @@ struct BlueCommsMacApp: App {
         .defaultSize(width: 900, height: 600)
     }
 
+    /// Unbundled binaries start as a background process; this makes the window visible.
     private func bringForward() {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)

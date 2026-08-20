@@ -1,11 +1,34 @@
+//
+//  NetworkManager.swift
+//
+//  Why this file exists:
+//    This is the radio. The app and CLI never touch NWListener / NWBrowser.
+//    They create one NetworkManager and call start / connect / send / stop.
+//
+//  What it does:
+//    • Advertises this Mac and browses for others on `_bluecomms._tcp`
+//      in domain `local.` (nil domain was unreliable).
+//    • includePeerToPeer = true turns on AWDL (AirDrop-class; no shared
+//      Wi-Fi AP required). Same radio as AirDrop — if AirDrop cannot see
+//      the other Mac, neither can we.
+//    • One TCP session per peer id (PR #4). Pending connections live in
+//      `pending` until handshake; then they move to `sessions`.
+//    • All mutation is on `queue`. Callers hop in via start/connect/send.
+//    • Failed/waiting listener or browser restarts with backoff (PR #1).
+//    • Filters our own Bonjour row so we do not connect to ourselves.
+//
+
 import Foundation
 import Network
 
 /// A Bonjour result we can actually talk to (must have a device-id TXT record).
 public struct DiscoveredPeer: Sendable, Equatable {
+    /// Device UUID string from TXT `id`. Stable across Bonjour name changes.
     public let id: String
     public let displayName: String
+    /// Full advertised name, including the short-id suffix.
     public let bonjourName: String
+    /// Where to open TCP. Comes from the browse result.
     public let endpoint: NWEndpoint
 }
 
@@ -32,11 +55,16 @@ public final class NetworkManager: @unchecked Sendable {
     private var restartAttempt = 0
     private var restartScheduled = false
 
+    /// Bonjour list changed. Already hopped to main.
     public var onPeersUpdated: (([DiscoveredPeer]) -> Void)?
+    /// CLI: any session became ready. Prefer onSecureSession in the app.
     public var onConnectionEstablished: (() -> Void)?
+    /// Handshake finished with this peer id.
     public var onSecureSession: ((UUID) -> Void)?
+    /// CLI: some session died. Prefer onPeerDisconnected in the app.
     public var onDisconnected: (() -> Void)?
     public var onPeerDisconnected: ((UUID) -> Void)?
+    /// CLI: inbound chat with no peer id. App uses onMessageFromPeer.
     public var onMessageReceived: ((String) -> Void)?
     public var onMessageFromPeer: ((UUID, String) -> Void)?
     public var onFileTransfer: ((UUID, FileTransferUpdate) -> Void)?
@@ -79,6 +107,7 @@ public final class NetworkManager: @unchecked Sendable {
         queue.setSpecific(key: queueKey, value: 1)
     }
 
+    /// Advertise + browse. Safe to call once; ChatStore also guards with didStart.
     public func start() {
         onQueueAsync {
             self.isStopping = false
@@ -109,6 +138,7 @@ public final class NetworkManager: @unchecked Sendable {
         }
     }
 
+    /// Outbound TCP. `id` is the device UUID string from the Bonjour TXT record.
     public func connectToPeer(id: String) {
         onQueueAsync {
             guard let peer = self.discoveredByID[id] else {
@@ -185,6 +215,7 @@ public final class NetworkManager: @unchecked Sendable {
         }
     }
 
+    /// Start an offer/chunk transfer. Session must already be ready.
     public func send(file url: URL, to peerID: String, id: UUID = UUID()) {
         onQueueAsync {
             guard let conn = self.sessions[peerID], conn.isReadyForMessages else {
@@ -203,6 +234,7 @@ public final class NetworkManager: @unchecked Sendable {
         startBrowser()
     }
 
+    /// Publish `_bluecomms._tcp` with our id/name/proto in the TXT record.
     private func startListener() {
         listener?.cancel()
         listener = nil
@@ -234,6 +266,7 @@ public final class NetworkManager: @unchecked Sendable {
         }
     }
 
+    /// Watch the same service type. Domain must be `local.` not nil.
     private func startBrowser() {
         browser?.cancel()
         browser = nil
@@ -289,6 +322,7 @@ public final class NetworkManager: @unchecked Sendable {
         }
     }
 
+    /// Rebuild the peer map. Drop ourselves. Remember last-seen for people who left.
     private func applyBrowseResults(_ results: Set<NWBrowser.Result>) {
         var next: [String: DiscoveredPeer] = [:]
         for result in results {
@@ -326,6 +360,7 @@ public final class NetworkManager: @unchecked Sendable {
         attach(connection)
     }
 
+    /// Wrap a new NWConnection (inbound or outbound) and wait for handshake.
     private func attach(_ connection: NWConnection) {
         let peerConnection = PeerConnection(connection: connection, identity: identity, queue: queue)
         let connectionID = peerConnection.id
@@ -344,6 +379,7 @@ public final class NetworkManager: @unchecked Sendable {
             guard let self else { return }
             let key = peerID.uuidString
             guard let established = self.pending.removeValue(forKey: connectionID) else { return }
+            // Two connections to the same peer: keep the one that just shook hands.
             if let old = self.sessions[key], old.id != connectionID {
                 old.onStateChange = nil
                 old.onReadyForChat = nil
@@ -434,6 +470,7 @@ public final class NetworkManager: @unchecked Sendable {
         }
     }
 
+    /// Listener/browser died. Exponential backoff, cap 30s. stop() cancels this.
     private func scheduleRestart(reason: String) {
         guard !isStopping, !restartScheduled else { return }
         restartScheduled = true
@@ -489,12 +526,14 @@ public final class NetworkManager: @unchecked Sendable {
         }
     }
 
+    /// TCP + AWDL. Without includePeerToPeer we only work on the same Wi-Fi AP.
     private static func makeParameters() -> NWParameters {
         let params = NWParameters.tcp
         params.includePeerToPeer = true
         return params
     }
 
+    /// Run on the network queue. If we are already on it, do not deadlock via async.
     private func onQueueAsync(_ body: @escaping @Sendable () -> Void) {
         if DispatchQueue.getSpecific(key: queueKey) != nil {
             body()
@@ -519,6 +558,7 @@ extension DiscoveredPeer {
         return String(id.replacingOccurrences(of: "-", with: "").prefix(8))
     }
 
+    /// Ignore rows with no `id` TXT or a proto we do not speak.
     init?(result: NWBrowser.Result) {
         guard case .service(let name, _, _, _) = result.endpoint else { return nil }
         guard case .bonjour(let txt) = result.metadata,

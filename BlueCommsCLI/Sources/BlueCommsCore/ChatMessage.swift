@@ -1,6 +1,18 @@
+//
+//  ChatMessage.swift
+//
+//  Why this file exists:
+//    One row in a thread — text or a file card. Shared by the Mac UI and
+//    MessageArchive. Codable so history survives a restart (PR #3). File
+//    fields were added in PR #5.
+//
+//  File bytes are NOT stored here. We keep name / size / path / progress.
+//  The actual bytes live on disk (source file, or ~/Downloads/BlueComms).
+//
+
 import Foundation
 
-/// One row in a thread. `kind == .file` uses the file* fields.
+/// sent = on the wire (or already delivered). queued = waiting for a session.
 public enum MessageDelivery: String, Codable, Sendable {
     case sent
     case queued
@@ -11,17 +23,23 @@ public enum MessageKind: String, Codable, Sendable {
     case file
 }
 
+/// One bubble in the thread. `peerID` is the other Mac's device UUID string.
 public struct ChatMessage: Identifiable, Hashable, Codable, Sendable {
     public let id: UUID
+    /// Other Mac's device UUID string (conversation key).
     public let peerID: String
+    /// Chat text, or the file name when kind == .file.
     public let text: String
+    /// true = we sent it (right side). false = they sent it.
     public let isLocal: Bool
     public let sentAt: Date
     public var delivery: MessageDelivery
     public var kind: MessageKind
     public var fileName: String?
     public var fileSize: UInt64?
+    /// Local path: the file we sent, or ~/Downloads/BlueComms/... when received.
     public var filePath: String?
+    /// Ties UI progress updates to this row.
     public var transferID: UUID?
     public var progress: Double
     public var fileState: FileTransferState?
@@ -56,6 +74,7 @@ public struct ChatMessage: Identifiable, Hashable, Codable, Sendable {
         self.fileState = fileState
     }
 
+    /// Older archives have no file keys. Missing fields become a text message.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)

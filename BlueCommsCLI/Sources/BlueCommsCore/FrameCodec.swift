@@ -1,6 +1,17 @@
+//
+//  FrameCodec.swift
+//
+//  Why this file exists:
+//    TCP is a byte stream. Two sends can arrive as one blob, or one send can
+//    split mid-message. Without a length prefix, chat looked garbled and
+//    files could not be reassembled (fixed in PR #1).
+//
+//  Format: 4-byte big-endian size + payload. Cap 512 KB so a bad peer cannot
+//  ask us to allocate gigabytes. File transfer uses many of these frames.
+//
+
 import Foundation
 
-/// Length-prefixed frames. TCP is a stream — without this, messages glue together or split.
 public enum FrameError: Error, Equatable, Sendable {
     case payloadTooLarge(Int)
     case declaredLengthTooLarge(UInt32)
@@ -8,8 +19,10 @@ public enum FrameError: Error, Equatable, Sendable {
 
 public enum FrameCodec: Sendable {
     public static let headerSize = 4
+    /// 512 KB. Must stay in sync with FileMessage.chunkSize + crypto overhead.
     public static let maxPayloadSize = 524_288
 
+    /// Prefix `payload` with its big-endian length.
     public static func encode(_ payload: Data) throws -> Data {
         guard payload.count <= maxPayloadSize else {
             throw FrameError.payloadTooLarge(payload.count)
@@ -27,11 +40,13 @@ public enum FrameCodec: Sendable {
     }
 }
 
+/// Incremental reader. Feed whatever TCP gave you; get zero or more payloads.
 public final class FrameDecoder: @unchecked Sendable {
     private var buffer = Data()
 
     public init() {}
 
+    /// Append a TCP chunk. Returns complete payloads only; leftover bytes stay buffered.
     public func append(_ data: Data) throws -> [Data] {
         buffer.append(data)
         var frames: [Data] = []
