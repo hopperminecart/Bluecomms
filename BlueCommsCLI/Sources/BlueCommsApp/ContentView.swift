@@ -3,14 +3,17 @@ import BlueCommsCore
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Sidebar + thread. HStack on purpose — NavigationSplitView opened blank on this macOS.
 struct ContentView: View {
     @EnvironmentObject private var store: ChatStore
 
     var body: some View {
-        NavigationSplitView {
+        HStack(spacing: 0) {
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 340)
-        } detail: {
+                .frame(width: 280)
+            Rectangle()
+                .fill(Palette.hairline)
+                .frame(width: 1)
             ChatView()
         }
         .tint(Color(red: 0.27, green: 0.53, blue: 1.0))
@@ -36,16 +39,6 @@ private struct SidebarView: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Palette.muted)
                     .textSelection(.enabled)
-                if store.isDemo {
-                    Text("DEMO")
-                        .font(.system(size: 10, weight: .bold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Palette.accent.opacity(0.2))
-                        .foregroundStyle(Palette.accent)
-                        .clipShape(Capsule())
-                        .padding(.top, 4)
-                }
             }
             .padding(16)
 
@@ -69,16 +62,20 @@ private struct SidebarView: View {
                 }
                 .padding(16)
             } else {
-                List(store.peers, selection: Binding(
-                    get: { store.selectedPeerID },
-                    set: { if let id = $0 { store.select(peerID: id) } }
-                )) { peer in
-                    PeerRow(peer: peer, isSelected: peer.id == store.selectedPeerID)
-                        .tag(peer.id)
-                        .listRowBackground(Color.clear)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(store.peers) { peer in
+                            PeerRow(peer: peer, isSelected: peer.id == store.selectedPeerID)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(peer.id == store.selectedPeerID ? Palette.composer : Color.clear)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .contentShape(Rectangle())
+                                .onTapGesture { store.select(peerID: peer.id) }
+                        }
+                    }
+                    .padding(.horizontal, 8)
                 }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)
             }
 
             Spacer(minLength: 0)

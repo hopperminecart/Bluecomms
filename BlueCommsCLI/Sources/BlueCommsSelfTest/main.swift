@@ -27,6 +27,7 @@ struct BlueCommsSelfTest {
             ("identity load is stable", testLoadOrCreateIsStable),
             ("tofu remembers then matches", testTOFURemembersThenMatches),
             ("tofu mismatch", testTOFUMismatch),
+            ("computer name is non-empty", testComputerNameIsNonEmpty),
             ("bonjour name respects byte limit", testBonjourNameRespectsByteLimit),
             ("framed ciphertext round trip", testFramedCiphertextRoundTrip),
             ("archive round trip", testArchiveRoundTrip),
@@ -242,6 +243,10 @@ private func testTOFUMismatch() throws {
     let second = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
     _ = try store.verifyOrRemember(peerID: peerID, publicKey: first)
     try expectThrows({ try store.verifyOrRemember(peerID: peerID, publicKey: second) }, as: CryptoError.tofuMismatch)
+}
+
+private func testComputerNameIsNonEmpty() throws {
+    try expect(!localComputerName().isEmpty, "computer name should not be empty")
 }
 
 private func testBonjourNameRespectsByteLimit() throws {

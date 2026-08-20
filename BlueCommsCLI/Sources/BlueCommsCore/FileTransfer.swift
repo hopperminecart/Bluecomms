@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 
+/// Chunked file transfer (256 KB pieces, 8 GB cap). Do not load the whole file into RAM.
 public enum FileTransferState: String, Codable, Sendable {
     case queued
     case transferring

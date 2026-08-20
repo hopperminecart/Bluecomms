@@ -1,5 +1,6 @@
 import Foundation
 
+/// A nearby Mac from Bonjour, plus whether we have a live TCP session.
 struct NearbyPeer: Identifiable, Hashable, Sendable {
     let id: String
     let displayName: String
@@ -10,7 +11,5 @@ struct NearbyPeer: Identifiable, Hashable, Sendable {
 }
 
 enum ConnectionPhase: Equatable, Sendable {
-    case idle
-    case connecting
-    case ready
+    case idle, connecting, ready
 }

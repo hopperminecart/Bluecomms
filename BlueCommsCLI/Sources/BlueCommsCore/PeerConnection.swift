@@ -2,6 +2,8 @@ import CryptoKit
 import Foundation
 import Network
 
+/// One TCP session: handshake, framed chat, chunked files.
+/// `isComplete` on send must stay false or the first chat line FINs the stream.
 final class PeerConnection: @unchecked Sendable {
     let id: UUID
     let connection: NWConnection
