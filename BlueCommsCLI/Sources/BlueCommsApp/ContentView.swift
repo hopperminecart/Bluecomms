@@ -3,6 +3,7 @@ import BlueCommsCore
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Sidebar + thread. HStack on purpose — NavigationSplitView opened blank on this macOS.
 struct ContentView: View {
     @EnvironmentObject private var store: ChatStore
 
@@ -38,16 +39,6 @@ private struct SidebarView: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Palette.muted)
                     .textSelection(.enabled)
-                if store.isDemo {
-                    Text("DEMO")
-                        .font(.system(size: 10, weight: .bold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Palette.accent.opacity(0.2))
-                        .foregroundStyle(Palette.accent)
-                        .clipShape(Capsule())
-                        .padding(.top, 4)
-                }
             }
             .padding(16)
 

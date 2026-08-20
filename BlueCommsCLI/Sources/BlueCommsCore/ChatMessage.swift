@@ -1,5 +1,6 @@
 import Foundation
 
+/// One row in a thread. `kind == .file` uses the file* fields.
 public enum MessageDelivery: String, Codable, Sendable {
     case sent
     case queued
@@ -73,6 +74,7 @@ public struct ChatMessage: Identifiable, Hashable, Codable, Sendable {
     }
 }
 
+/// On-disk chat history. `outboundIDs` kept so older archive files still decode.
 public struct ConversationSnapshot: Codable, Equatable, Sendable {
     public var conversations: [String: [ChatMessage]]
     public var outboundIDs: [UUID]

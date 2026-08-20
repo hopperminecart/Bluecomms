@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 
+/// On-wire type byte. Handshake is plaintext; chat and files are AES-GCM after key exchange.
 public enum WireType: UInt8, Sendable {
     case handshake = 0x01
     case ciphertext = 0x02
@@ -47,6 +48,7 @@ public struct HandshakePayload: Equatable, Sendable {
     }
 }
 
+/// One X25519 handshake, then AES-GCM. Direction keys come from comparing public keys.
 public struct CryptoSession: Sendable {
     private let localPrivateKey: Curve25519.KeyAgreement.PrivateKey
     private var sendKey: SymmetricKey?

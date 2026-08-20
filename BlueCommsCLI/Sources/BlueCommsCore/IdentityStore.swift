@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import SystemConfiguration
 
+/// Instant computer name. Do not use `Host.current()` — it can hang the main thread.
 public func localComputerName() -> String {
     if let name = SCDynamicStoreCopyComputerName(nil, nil) as String? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -13,6 +14,7 @@ public func localComputerName() -> String {
     return host.isEmpty ? "Mac" : host
 }
 
+/// Persistent device id + X25519 key in ~/.bluecomms (or a test directory).
 public struct DeviceIdentity: Sendable {
     public let id: UUID
     public let displayName: String

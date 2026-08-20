@@ -1,95 +1,38 @@
 # BlueComms
 
-Off-grid peer-to-peer chat for nearby Macs. Devices find each other with Bonjour over the local network or AWDL (`includePeerToPeer`) and talk over an encrypted TCP session. No internet or shared Wi-Fi network is required — Wi-Fi just needs to be on.
+Nearby Mac chat and files over Bonjour + AWDL. No internet. Wi-Fi just needs to be on.
 
-## Test with a friend (do this)
+## Run with a friend
 
-`--demo` is fake UI only. It will **not** see your friend's Mac. Both of you run the **real app**.
-
-On **each** Mac:
+On **each** Mac, after this fix is on `main`:
 
 ```bash
-git clone https://github.com/hopperminecart/Bluecomms.git
 cd Bluecomms
 git pull
 cd BlueCommsCLI
 swift run BlueCommsApp
 ```
 
-Then:
+1. Wi-Fi on (same network not required).
+2. Allow **Local Network** for Terminal.
+3. Click the other Mac → **Connect** → type, Attach, Screenshot, or drop a file.
 
-1. Turn **Wi-Fi on** (you do not need the same network).
-2. If macOS asks for **Local Network**, click Allow. If not: System Settings → Privacy & Security → Local Network → enable **Terminal**.
-3. Your names should appear in each other's sidebar.
-4. Click a name → **Connect** → type, or Attach / Screenshot / drop a file.
+Incoming files: `~/Downloads/BlueComms`.
 
-Terminal instead of the window:
+Terminal instead:
 
 ```bash
 cd Bluecomms/BlueCommsCLI
 swift run BlueCommsCLI
 ```
 
-Then `list`, `connect 0`, type a message, `quit`.
-
-**Do not** use `swift run BlueCommsApp --demo` for a two-person test.
-
-## Build and run
+Then `list`, `connect 0`, type, `quit`.
 
 Needs macOS 14+ and Swift 6.1.
 
-```bash
-cd BlueCommsCLI
-swift run BlueCommsApp          # real radio — use this with a friend
-swift run BlueCommsApp --demo   # fake peers, one Mac, UI only
-swift run BlueCommsCLI          # real radio in the terminal
-```
-
-Run it on two Macs on the same LAN, or on two Macs with Wi-Fi on and no access point (AWDL).
-
-The first launch creates `~/.bluecomms/` (device id, identity key, known-peer list, encrypted conversation archive) with `0700` / `0600` permissions. Chat history survives quit. Messages typed while a peer is gone stay queued and flush when that session comes back. You can keep a live session with more than one peer; the sidebar shows online vs last-seen.
-
-Photos, screenshots, and videos send as **chunked encrypted files** (256 KB pieces, up to **8 GB**). Drop a file on the thread, use Attach, or Screenshot. Incoming files land in `~/Downloads/BlueComms`. Same radio range as AirDrop — not the internet. A 500 MB–1 GB clip is fine if both Macs stay nearby until it finishes.
-
-## Local Network permission
-
-macOS will not let a process browse Bonjour until it has Local Network access.
-
-1. Run `swift run` from Terminal.
-2. If a Local Network prompt appears, allow it.
-3. Otherwise open **System Settings → Privacy & Security → Local Network** and enable Terminal (or the host app that launched the binary).
-
-Keep Wi-Fi on. You do not need to join a network.
-
-## Commands
-
-```
-help                 Show commands
-list                 Show discovered peers
-connect <index>      Connect by list index
-connect <name>       Connect by name or short id
-disconnect           Close the current session
-quit / exit          Stop advertising and leave
-<text>               Send a message once connected
-```
-
-Peer indexes are sorted by display name and stay stable while that set of peers is present. Your own advertisement is hidden.
-
-## Security
-
-Sessions use X25519 key agreement and AES-GCM. Each device has a persistent identity key.
-
-On first connect, BlueComms stores the peer's public key (trust on first use) and prints fingerprints. Read them back to each other:
-
-- Your "Peer fingerprint" should match their "Your fingerprint".
-
-If the same device id later presents a different key, the connection is dropped.
-
-This stops passive sniffing. An attacker who is present on the first connect can still poison TOFU if you skip the fingerprint check.
+If AirDrop also cannot see the other Mac, fix AirDrop first (same radio). Quit Tailscale and try with the firewall off.
 
 ## Tests
-
-This machine's Command Line Tools do not include XCTest, so tests are a regular executable:
 
 ```bash
 cd BlueCommsCLI

@@ -1,6 +1,7 @@
 import Foundation
 import Network
 
+/// A Bonjour result we can actually talk to (must have a device-id TXT record).
 public struct DiscoveredPeer: Sendable, Equatable {
     public let id: String
     public let displayName: String
@@ -8,6 +9,8 @@ public struct DiscoveredPeer: Sendable, Equatable {
     public let endpoint: NWEndpoint
 }
 
+/// Advertise + browse `_bluecomms._tcp` with `includePeerToPeer` (AWDL).
+/// All mutation happens on `queue`. Callers hop in via start/connect/send.
 public final class NetworkManager: @unchecked Sendable {
     static let serviceType = "_bluecomms._tcp"
     static let serviceDomain = "local."

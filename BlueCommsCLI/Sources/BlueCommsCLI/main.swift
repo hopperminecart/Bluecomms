@@ -1,6 +1,7 @@
 import Foundation
 import BlueCommsCore
 
+// Terminal client. Same radio as the Mac app. Type `help`.
 let manager: NetworkManager
 do {
     manager = try NetworkManager()

@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 
+/// Encrypted chat history next to the identity files.
 public struct MessageArchive: Sendable {
     public let directory: URL
     private let key: SymmetricKey

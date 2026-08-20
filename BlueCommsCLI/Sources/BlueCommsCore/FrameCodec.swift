@@ -1,5 +1,6 @@
 import Foundation
 
+/// Length-prefixed frames. TCP is a stream — without this, messages glue together or split.
 public enum FrameError: Error, Equatable, Sendable {
     case payloadTooLarge(Int)
     case declaredLengthTooLarge(UInt32)
