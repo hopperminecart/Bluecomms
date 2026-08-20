@@ -1,5 +1,17 @@
 import CryptoKit
 import Foundation
+import SystemConfiguration
+
+public func localComputerName() -> String {
+    if let name = SCDynamicStoreCopyComputerName(nil, nil) as String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+    }
+    let host = ProcessInfo.processInfo.hostName
+        .replacingOccurrences(of: ".local", with: "")
+        .replacingOccurrences(of: ".lan", with: "")
+    return host.isEmpty ? "Mac" : host
+}
 
 public struct DeviceIdentity: Sendable {
     public let id: UUID
@@ -50,8 +62,7 @@ public struct IdentityStore: Sendable {
         try ensureDirectory()
         let id = try loadOrCreateDeviceID()
         let privateKey = try loadOrCreatePrivateKey()
-        let host = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
-        let displayName = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = localComputerName()
         return DeviceIdentity(
             id: id,
             displayName: displayName.isEmpty ? "Unknown Mac" : displayName,

@@ -2,15 +2,47 @@
 
 Off-grid peer-to-peer chat for nearby Macs. Devices find each other with Bonjour over the local network or AWDL (`includePeerToPeer`) and talk over an encrypted TCP session. No internet or shared Wi-Fi network is required — Wi-Fi just needs to be on.
 
+## Test with a friend (do this)
+
+`--demo` is fake UI only. It will **not** see your friend's Mac. Both of you run the **real app**.
+
+On **each** Mac:
+
+```bash
+git clone https://github.com/hopperminecart/Bluecomms.git
+cd Bluecomms
+git pull
+cd BlueCommsCLI
+swift run BlueCommsApp
+```
+
+Then:
+
+1. Turn **Wi-Fi on** (you do not need the same network).
+2. If macOS asks for **Local Network**, click Allow. If not: System Settings → Privacy & Security → Local Network → enable **Terminal**.
+3. Your names should appear in each other's sidebar.
+4. Click a name → **Connect** → type, or Attach / Screenshot / drop a file.
+
+Terminal instead of the window:
+
+```bash
+cd Bluecomms/BlueCommsCLI
+swift run BlueCommsCLI
+```
+
+Then `list`, `connect 0`, type a message, `quit`.
+
+**Do not** use `swift run BlueCommsApp --demo` for a two-person test.
+
 ## Build and run
 
 Needs macOS 14+ and Swift 6.1.
 
 ```bash
 cd BlueCommsCLI
-swift run BlueCommsApp          # Mac app
-swift run BlueCommsApp --demo   # UI with simulated peers (no second Mac)
-swift run BlueCommsCLI          # original terminal client
+swift run BlueCommsApp          # real radio — use this with a friend
+swift run BlueCommsApp --demo   # fake peers, one Mac, UI only
+swift run BlueCommsCLI          # real radio in the terminal
 ```
 
 Run it on two Macs on the same LAN, or on two Macs with Wi-Fi on and no access point (AWDL).

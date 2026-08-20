@@ -20,6 +20,7 @@ final class ChatStore: ObservableObject {
     private var manager: NetworkManager?
     private var connectedIDs: Set<String> = []
     private var archive: MessageArchive?
+    private var didStart = false
 
     var selectedPeer: NearbyPeer? {
         peers.first(where: { $0.id == selectedPeerID })
@@ -71,6 +72,8 @@ final class ChatStore: ObservableObject {
     }
 
     func start() {
+        guard !didStart else { return }
+        didStart = true
         manager?.start()
     }
 
@@ -398,11 +401,16 @@ final class ChatStore: ObservableObject {
     private func mergePresence(_ discovered: [DiscoveredPeer]) {
         let onlineIDs = Set(discovered.map(\.id))
         let now = Date()
+        var next = peers
+        var changed = false
         for peer in discovered {
-            if let index = peers.firstIndex(where: { $0.id == peer.id }) {
-                peers[index].isOnline = true
+            if let index = next.firstIndex(where: { $0.id == peer.id }) {
+                if !next[index].isOnline {
+                    next[index].isOnline = true
+                    changed = true
+                }
             } else {
-                peers.append(
+                next.append(
                     NearbyPeer(
                         id: peer.id,
                         displayName: peer.displayName,
@@ -412,15 +420,20 @@ final class ChatStore: ObservableObject {
                         isSessionOpen: connectedIDs.contains(peer.id)
                     )
                 )
+                changed = true
             }
         }
-        for index in peers.indices where !onlineIDs.contains(peers[index].id) {
-            if peers[index].isOnline {
-                peers[index].isOnline = false
-                peers[index].lastSeen = now
+        for index in next.indices where !onlineIDs.contains(next[index].id) {
+            if next[index].isOnline {
+                next[index].isOnline = false
+                next[index].lastSeen = now
+                changed = true
             }
         }
-        if !peers.isEmpty, statusLine.contains("Starting") {
+        if changed {
+            peers = next
+        }
+        if !next.isEmpty, statusLine.contains("Starting") {
             statusLine = "Nearby peers updated"
         }
     }
